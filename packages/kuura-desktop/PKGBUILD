@@ -11,10 +11,9 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="Desktop metapackage: KDE Plasma session with Wayland, audio, network and fonts"
 arch=('any')
-# TODO: placeholder project URL (a domain reserved for documentation) pending an
-# owner decision; namcap reports a missing url as an error, so the field must exist.
-url='https://example.org/'
-# TODO: placeholder licence pending an owner decision; replace before any release.
+url='https://github.com/ville-Soiklander/kuura'
+# Themes, configuration and scripts of the project are GPL-3.0-or-later (see LICENSE
+# and docs/LICENSES/README.md).
 license=('GPL-3.0-or-later')
 
 # Scope is fixed by docs/BUILD_CONTRACT.md: Plasma session, KWin compositor,
