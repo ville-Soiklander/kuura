@@ -1,7 +1,7 @@
 # kuura
 
 A desktop distribution built **on top of** Arch Linux: KDE Plasma 6 on Wayland with
-a calm, glass-like visual language of its own. `kuura` is a temporary codename.
+a calm, glass-like visual language of its own.
 
 **Status: early.** The reproducible package build and the design-token pipeline
 exist. The compositor material effect, icons, wallpapers, installer and ISO do not.
