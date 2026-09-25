@@ -1,6 +1,7 @@
-# Build scripts run on Linux: keep LF line endings even when checked out on Windows.
-*.sh text eol=lf
-Makefile text eol=lf
-PKGBUILD text eol=lf
-Containerfile text eol=lf
-*.yml text eol=lf
+# Every text file uses LF line endings in the working tree, whatever the local git
+# settings are: the build runs on Linux and CRLF would corrupt shell scripts and
+# values read from .env.example.
+* text=auto eol=lf
+
+# Binary files must never be touched by line-ending conversion.
+*.png binary
