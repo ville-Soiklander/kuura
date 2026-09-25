@@ -1,0 +1,51 @@
+# Metapackage that turns a base Arch installation into the desktop of the
+# distribution. It ships no files of its own: installing it only pulls in the
+# packages listed in `depends`, so the desktop is defined in exactly one place.
+#
+# The package name comes from the environment (DISTRO_NAME, see .env.example) so
+# that the codename is configured once. makepkg is run through build/build_repo.sh,
+# which exports the variable; building by hand without it fails with a clear error.
+
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-desktop"
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Desktop metapackage: KDE Plasma session with Wayland, audio, network and fonts"
+arch=('any')
+# TODO: placeholder project URL (a domain reserved for documentation) pending an
+# owner decision; namcap reports a missing url as an error, so the field must exist.
+url='https://example.org/'
+# TODO: placeholder licence pending an owner decision; replace before any release.
+license=('GPL-3.0-or-later')
+
+# Scope is fixed by docs/BUILD_CONTRACT.md: Plasma session, KWin compositor,
+# display manager, file manager, terminal, Kvantum, audio and network applets,
+# Wayland support and the two font packages. Extend the contract before this list.
+depends=(
+    # MUST stay first. Several Plasma packages need a `jack` provider, and pacman
+    # resolves `depends` depth first in list order, so whichever provider is reached
+    # first wins. Listed later, the unrelated jack2 server was picked and then
+    # conflicted with pipewire-jack (found by `make verify-install`).
+    'pipewire-jack'
+    # Plasma session and compositor
+    'plasma-desktop'
+    'kwin'
+    'kscreen'
+    'powerdevil'
+    # Display manager
+    'sddm'
+    # Applications
+    'dolphin'
+    'konsole'
+    # Theme engine
+    'kvantum'
+    # Audio and network applets
+    'plasma-nm'
+    'plasma-pa'
+    'pipewire-pulse'
+    # Wayland support and desktop portal integration
+    'xdg-desktop-portal-kde'
+    'qt6-wayland'
+    # Fonts
+    'inter-font'
+    'ttf-jetbrains-mono'
+)

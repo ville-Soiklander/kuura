@@ -1,0 +1,6 @@
+# Build scripts run on Linux: keep LF line endings even when checked out on Windows.
+*.sh text eol=lf
+Makefile text eol=lf
+PKGBUILD text eol=lf
+Containerfile text eol=lf
+*.yml text eol=lf

@@ -1,0 +1,55 @@
+# Build image for the reproducible package build (see docs/BUILD_CONTRACT.md).
+#
+# Every package version inside the image is frozen to one day of the Arch Linux
+# Archive, so the same ARCH_ARCHIVE_DATE always yields the same toolchain and
+# the same dependency versions. Build it through `make image`, which passes the
+# build argument from the project configuration.
+
+FROM docker.io/library/archlinux:base
+
+# Snapshot date in YYYY/MM/DD form; supplied by the Makefile from .env.
+ARG ARCH_ARCHIVE_DATE
+
+# Point pacman at the dated archive snapshot only. The mirror list is written
+# with printf so that $repo and $arch stay literal: pacman expands them itself
+# for every repository. The date is validated first because it ends up in a URL.
+RUN case "${ARCH_ARCHIVE_DATE}" in \
+        [0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]) ;; \
+        *) echo "ARCH_ARCHIVE_DATE must have the form YYYY/MM/DD" >&2; exit 1 ;; \
+    esac \
+    && printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' \
+        "${ARCH_ARCHIVE_DATE}" > /etc/pacman.d/mirrorlist
+
+# Refresh the keyring first: packages in the snapshot may be signed by keys that
+# the (possibly older or newer) base image does not know yet, which would make the
+# full upgrade fail signature checks. The second -u in -Syuu lets pacman also
+# downgrade packages that are newer in the base image than in the snapshot, so the
+# result matches the snapshot exactly instead of being a mix of two dates.
+# The package cache is deleted in the same layer to keep the image small.
+RUN pacman -Sy --noconfirm archlinux-keyring \
+    && pacman -Syuu --noconfirm \
+    && pacman -S --noconfirm --needed base-devel git namcap gnupg \
+    && rm -rf /var/cache/pacman/pkg/*
+
+# makepkg refuses to run as root, so the build runs as an unprivileged user.
+# Passwordless sudo is needed because `makepkg --syncdeps` calls `sudo pacman`
+# to install dependencies. This is acceptable ONLY because the image is a
+# throwaway build container that is never shipped or exposed to untrusted input;
+# it must never be copied into a production image.
+RUN useradd --create-home --shell /bin/bash builder \
+    && echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder \
+    && chmod 0440 /etc/sudoers.d/builder
+
+# Copy sources into the image instead of bind-mounting them: ownership and
+# permissions of mounts from a Windows drive are unreliable. The COPY steps come
+# last so that editing a package or script does not invalidate the (slow)
+# pacman layers above.
+WORKDIR /home/builder
+COPY --chown=builder:builder packages/ packages/
+COPY --chown=builder:builder --chmod=0755 build/ build/
+
+USER builder
+
+# Configuration (DISTRO_NAME, ARCH_ARCHIVE_DATE, GPG_KEY_ID, ...) is passed in as
+# environment variables when the container is created.
+CMD ["bash", "build/build_repo.sh"]

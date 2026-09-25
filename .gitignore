@@ -1,0 +1,25 @@
+# Secrets and credentials
+.env
+*.pem
+*.key
+*.p12
+credentials.json
+token.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+# Orchestrator instructions and tooling stay local; this repository is public
+CLAUDE.md
+distro-tyonkulku.md
+memory/
+reports/
+localfarm/
+scripts/
+
+# Build outputs: container build cache, signed package repository, development signing keys
+.build/

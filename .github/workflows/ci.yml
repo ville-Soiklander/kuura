@@ -1,0 +1,65 @@
+# Continuous Integration workflow for the Linux distribution build.
+#
+# This workflow enforces code quality and builds a signed package repository
+# from the sources defined in PKGBUILD files. The build is reproducible: it
+# does not depend on the developer machine's state. Repository configuration
+# (distro name, archive date, output directory, container engine) is read
+# from .env.example at job runtime.
+#
+# Jobs:
+#   - lint-test: Run linter (ruff, forbidden terms check) and unit tests on each push/PR.
+#   - build-repo: Build packages in a clean container, sign them, and verify
+#     installation in a fresh Arch environment. Produces a 7-day artifact.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-test:
+    name: Lint and test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        # Pin to full commit SHA before first release
+      - uses: actions/setup-python@v5
+        # Pin to full commit SHA before first release
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run linter and forbidden terms check
+        run: make check
+      - name: Run tests
+        run: make test
+
+  build-repo:
+    name: Build and verify repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        # Pin to full commit SHA before first release
+      # verify-install depends on the repo target, so this one step builds the signed
+      # repository and then installs the metapackage from it into a fresh container.
+      - name: Build repository and verify installation
+        env:
+          CONTAINER_ENGINE: podman
+        run: make verify-install
+      - name: Upload repository artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        # Pin to full commit SHA before first release
+        with:
+          name: repository
+          path: .build/repo/
+          retention-days: 7
