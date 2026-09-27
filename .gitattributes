@@ -5,3 +5,10 @@
 
 # Binary files must never be touched by line-ending conversion.
 *.png binary
+
+# Approved golden screenshots of the screenshot harness are stored with git-lfs. This
+# rule must stay AFTER the `*.png binary` line above: when two lines set the same
+# attribute the later line wins, so here `diff=lfs merge=lfs` override the `-diff -merge`
+# that the `binary` macro sets, while `-text` (no line-ending conversion) is set by both.
+# Other PNG files stay plain binary files.
+harness/goldens/**/*.png filter=lfs diff=lfs merge=lfs -text

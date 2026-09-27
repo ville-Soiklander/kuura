@@ -31,7 +31,16 @@ IMAGE := localhost/$(DISTRO_NAME)-build
 # WORKDIR of build/Containerfile plus the output directory of build/build_repo.sh.
 CONTAINER_REPO_DIR := /home/builder/repo
 
-.PHONY: image repo verify-install check test clean require-config
+# Screenshot harness (docs/HARNESS_CONTRACT.md): where the generated theme files, the
+# captured screenshots, the comparison report and the approved goldens live. The first
+# three are build outputs below .build/ (git-ignored); the goldens are committed.
+GENERATED_DIR  := .build/generated
+SHOTS_DIR      := .build/shots
+SHOTS_DIFF_DIR := .build/shots-diff
+GOLDENS_DIR    := harness/goldens
+
+.PHONY: image repo verify-install check test clean require-config \
+	vm-image shots shots-determinism goldens-review goldens-accept
 
 # Build the build image (packages frozen to ARCH_ARCHIVE_DATE, tools, user, scripts).
 image: require-config
@@ -61,6 +70,42 @@ repo: image
 # is provided separately; this target only starts it after the repository exists.
 verify-install: repo
 	bash build/verify_install.sh
+
+# Build the guest image of the screenshot harness (root.img, vmlinuz, initramfs.img in
+# .build/vm/). It installs the metapackage from the signed repository, so the repository
+# is rebuilt first; harness/vm/build_rootfs.sh keeps the expensive layers cached.
+vm-image: repo
+	bash harness/vm/build_rootfs.sh
+
+# Boot the image, capture every state and compare the shots with the goldens. The
+# theme files (colour schemes) that the capture applies inside the guest are generated
+# from the design tokens first. Fails on any differing or missing golden.
+shots: vm-image
+	python3 -m design.generate --out-dir $(GENERATED_DIR)
+	python3 -m harness.shots.capture --out $(SHOTS_DIR) --generated $(GENERATED_DIR)
+	python3 -m harness.shots.compare --shots $(SHOTS_DIR) --goldens $(GOLDENS_DIR) --out $(SHOTS_DIFF_DIR)
+
+# Boot and capture twice from a fresh boot each and check that the runs agree.
+shots-determinism: vm-image
+	python3 -m design.generate --out-dir $(GENERATED_DIR)
+	python3 -m harness.shots.determinism --runs 2 --generated $(GENERATED_DIR)
+
+# Capture and compare like `shots`, but tolerate states that have no golden yet, and
+# print where the side-by-side report is. A state that differs from its golden is what a
+# review is for, so exit status 1 of the comparison does not fail this target; status 2
+# (a problem with the environment) does.
+goldens-review: vm-image
+	python3 -m design.generate --out-dir $(GENERATED_DIR)
+	python3 -m harness.shots.capture --out $(SHOTS_DIR) --generated $(GENERATED_DIR)
+	@status=0; \
+	python3 -m harness.shots.compare --shots $(SHOTS_DIR) --goldens $(GOLDENS_DIR) --out $(SHOTS_DIFF_DIR) --allow-missing || status=$$?; \
+	echo "review report: $(SHOTS_DIFF_DIR)/review.html"; \
+	[ "$$status" -le 1 ] || exit "$$status"
+
+# Accept the captured shots as the new goldens. A human decision: run it only after
+# reading the review report, then commit the result. The tool refuses to run in CI.
+goldens-accept:
+	python3 -m harness.shots.accept --shots $(SHOTS_DIR) --goldens $(GOLDENS_DIR)
 
 # Static checks that do not need a container.
 check:
