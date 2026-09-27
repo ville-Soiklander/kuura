@@ -10,6 +10,10 @@
 #   - lint-test: Run linter (ruff, forbidden terms check) and unit tests on each push/PR.
 #   - build-repo: Build packages in a clean container, sign them, and verify
 #     installation in a fresh Arch environment. Produces a 7-day artifact.
+#   - screenshot-harness: Boot the desktop in a VM and compare it with the approved
+#     goldens (docs/HARNESS_CONTRACT.md). Skips itself, rather than failing the build,
+#     on a runner without nested virtualization (see the KVM check step) - GitHub has
+#     not documented KVM support on standard hosted Linux runners as a guarantee.
 
 # Third-party actions are pinned to full commit SHAs (a tag can be moved, a SHA
 # cannot); the release is named in the trailing comment. To update one, look up the
@@ -63,3 +67,39 @@ jobs:
           name: repository
           path: .build/repo/
           retention-days: 7
+
+  screenshot-harness:
+    name: Screenshot harness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+      - name: Check for nested virtualization
+        id: kvm
+        run: |
+          if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::/dev/kvm is not usable on this runner; skipping the screenshot harness (docs/HARNESS_CONTRACT.md, Limits)."
+          fi
+      - name: Install QEMU
+        if: steps.kvm.outputs.available == 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils ovmf
+      - name: Install Python dependencies
+        if: steps.kvm.outputs.available == 'true'
+        run: pip install -r requirements.txt
+      - name: Build the repository and the guest image, capture and compare
+        if: steps.kvm.outputs.available == 'true'
+        env:
+          CONTAINER_ENGINE: podman
+        run: make shots
+      - name: Upload the comparison report
+        if: always() && steps.kvm.outputs.available == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: shots-diff
+          path: .build/shots-diff/
+          retention-days: 14
