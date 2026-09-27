@@ -116,6 +116,15 @@ the clock.
 
 ## Limits
 
+**Confirmed empirically: standard GitHub-hosted `ubuntu-24.04` runners have no usable
+`/dev/kvm`.** The `screenshot-harness` CI job checks for it and skips itself with a
+warning rather than failing, so this is visible on every run rather than a silent gap.
+Until the project has a KVM-capable runner (a self-hosted one, at the cost of the
+security review that self-hosted runners need on a public repository, or a paid runner
+tier GitHub documents as supporting nested virtualization), `make shots` and
+`make shots-determinism` are validated locally only. `build-repo` (the signed package
+repository and its installation) has no such gap and runs on every push.
+
 Software rendering (llvmpipe) means GPU timing cannot be measured here; the frame-time
 budget of the compositor effect is verified separately. The output scale configuration
 is tied to the virtual monitor of a 2560x1440 mode.
