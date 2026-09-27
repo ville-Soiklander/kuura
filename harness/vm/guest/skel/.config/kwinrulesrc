@@ -1,0 +1,53 @@
+# KWin window rules for the screenshot harness: the windows of the file manager, System
+# Settings and the browser open at a FIXED position and size, whatever the application
+# remembers or prefers. Units are logical pixels (the desktop runs at scale 2, so the
+# 1000x600 window is 2000x1200 physical pixels).
+#
+# The geometry leaves the panel free: the logical screen is 1280x720 and the floating
+# panel occupies roughly its lowest 54 pixels, the window ends at y = 50 + 600 = 650.
+# The browser ignores the size rule when it starts (measured: it opens at its own
+# 1204x700), so harness-browser also passes --width 1000 --height 600; keep both equal.
+# The application id of each rule is what the application announces to the compositor,
+# not the name of its launcher: "systemsettings" for System Settings (measured).
+#
+# Rule values: positionrule / sizerule 2 = "Force" (the window cannot leave the geometry
+# while it is open; "Apply initially" would let a later resize stick).
+# wmclassmatch 1 = exact match of the application id; types 1 = normal windows only,
+# so dialogs and pop-ups of these applications keep their natural placement.
+
+[General]
+count=3
+rules=1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a01,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a02,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a03
+
+[1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a01]
+Description=Harness: file manager window geometry
+position=140,50
+positionrule=2
+size=1000,600
+sizerule=2
+types=1
+wmclass=org.kde.dolphin
+wmclasscomplete=false
+wmclassmatch=1
+
+[1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a02]
+Description=Harness: System Settings window geometry
+position=140,50
+positionrule=2
+size=1000,600
+sizerule=2
+types=1
+wmclass=systemsettings
+wmclasscomplete=false
+wmclassmatch=1
+
+[1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a03]
+Description=Harness: browser window geometry
+position=140,50
+positionrule=2
+size=1000,600
+sizerule=2
+types=1
+wmclass=firefox
+wmclasscomplete=false
+wmclassmatch=1

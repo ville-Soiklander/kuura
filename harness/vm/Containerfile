@@ -1,0 +1,200 @@
+# Guest root file system of the screenshot harness (see docs/HARNESS_CONTRACT.md).
+#
+# The image is a normal Arch system frozen to the same archive snapshot as the package
+# build (docs/BUILD_CONTRACT.md) with the metapackage installed from the signed
+# repository exactly as build/verify_install.sh does it. On top of that come the pieces
+# a screenshot test needs and a fully deterministic desktop configuration (guest/).
+# The container file system is later exported and turned into an ext4 disk image WITHOUT
+# mounting anything (see build_rootfs.sh), so the whole flow works with rootless Podman.
+#
+# Build it only through build_rootfs.sh: it stages the build context (this file, guest/
+# and a copy of the repository in repo/) and passes the build arguments.
+#
+# Layer order is a cache design: everything expensive and stable comes first, the
+# signed repository (whose signatures change on every `make repo`) comes late, so a
+# rebuild after `make repo` only repeats the last few small layers.
+
+FROM docker.io/library/archlinux:base
+
+# Snapshot date (YYYY/MM/DD) and codename, supplied by build_rootfs.sh from the project
+# configuration. Nothing is hard coded here.
+ARG ARCH_ARCHIVE_DATE
+ARG DISTRO_NAME
+# Space separated names of the packages the metapackage depends on, read from its
+# PKGBUILD by build_rootfs.sh (see the "dependencies first" layer below).
+ARG DESKTOP_DEPS
+# Fixed unprivileged account that the display manager logs in automatically.
+ARG DESKTOP_USER=desktop
+ARG DESKTOP_UID=1000
+
+# Point pacman at the dated archive snapshot only. printf keeps $repo and $arch
+# literal (pacman expands them). The values end up in a URL / a package name / a user
+# name, so they are validated first.
+RUN case "${ARCH_ARCHIVE_DATE}" in \
+        [0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]) ;; \
+        *) echo "ARCH_ARCHIVE_DATE must have the form YYYY/MM/DD" >&2; exit 1 ;; \
+    esac \
+    && case "${DISTRO_NAME}" in \
+        ""|*[!a-z0-9_-]*) echo "DISTRO_NAME may only contain a-z, 0-9, _ and -" >&2; exit 1 ;; \
+    esac \
+    && case "${DESKTOP_USER}" in \
+        ""|[!a-z_]*|*[!a-z0-9_-]*) echo "DESKTOP_USER is not a valid user name" >&2; exit 1 ;; \
+    esac \
+    && case "${DESKTOP_UID}" in \
+        ""|*[!0-9]*) echo "DESKTOP_UID must be a number" >&2; exit 1 ;; \
+    esac \
+    && printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' \
+        "${ARCH_ARCHIVE_DATE}" > /etc/pacman.d/mirrorlist
+
+# The archive server throttles clients that open many connections and then stalls them;
+# with the default of five parallel downloads a large install fails with "Operation too
+# slow" (seen in practice). Two connections and no per-file speed limit are slower but
+# reliable; the retry loop of the big layers below covers what is left.
+RUN sed -i -e 's/^#\?ParallelDownloads.*/ParallelDownloads = 2/' /etc/pacman.conf \
+    && grep -q '^ParallelDownloads = 2$' /etc/pacman.conf
+
+# WHY before the package install: mkinitcpio runs from a pacman hook when the kernel is
+# installed. Without this drop-in it would use the default hook list with `autodetect`,
+# which inspects the modules loaded on the BUILD HOST and would leave virtio_blk/ext4 out
+# of the initramfs. The explicit module list makes the initramfs independent of the
+# machine that built it.
+COPY guest/mkinitcpio-vm.conf /etc/mkinitcpio.conf.d/vm.conf
+
+# Full upgrade to the snapshot (-uu allows downgrades, so the result matches the snapshot
+# exactly), then the system pieces a VM needs:
+#   linux, mkinitcpio   kernel and initramfs generator (used for direct kernel boot)
+#   qemu-guest-agent    lets the host start programs and read files without a login
+#   mesa                OpenGL/EGL implementation incl. the llvmpipe software renderer
+#   dependencies of     the whole desktop (Plasma session, KWin, SDDM, ...) EXCEPT the
+#   the metapackage     metapackage itself. WHY here: the metapackage comes from the
+#                       signed repository, which is rebuilt (new signatures) on every
+#                       `make repo`; installing the dependencies before the repository
+#                       is copied in keeps this large layer in the build cache. They are
+#                       marked as dependencies, as they will be once the metapackage
+#                       is installed.
+# DESKTOP_DEPS is validated and expanded unquoted ON PURPOSE (one word per package).
+RUN retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -lt 4 ] || return 1; echo "retry $n of 3: $*" >&2; sleep 10; done; } \
+    && case "${DESKTOP_DEPS}" in \
+        ""|*[!a-z0-9@._+\ -]*) echo "DESKTOP_DEPS is empty or has unsupported characters" >&2; exit 1 ;; \
+    esac \
+    && pacman-key --init \
+    && pacman-key --populate archlinux \
+    && retry pacman -Sy --noconfirm archlinux-keyring \
+    && retry pacman -Syuu --noconfirm --disable-download-timeout \
+    && retry pacman -S --noconfirm --needed --disable-download-timeout base linux mkinitcpio qemu-guest-agent mesa \
+    && retry pacman -S --noconfirm --needed --asdeps --disable-download-timeout ${DESKTOP_DEPS} \
+    && rm -rf /var/cache/pacman/pkg/*
+
+# TEST IMAGE ONLY. These packages are NOT part of the shipped metapackage; the
+# screenshot states need them and nothing else in this repository installs them:
+#   libnotify        notify-send, sends the desktop notification of the `notification` state
+#   firefox          the browser of the `browser-window` state (a pre-made profile and a
+#                    local static page are in guest/overlay, see harness-browser)
+#   dolphin          file manager (also in the metapackage; listed so that the test image
+#   systemsettings   keeps working if the metapackage ever drops one of them; KRunner is
+#                    part of plasma-workspace and needs no extra package)
+# --needed: packages that are already installed as dependencies are left alone.
+RUN retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -lt 4 ] || return 1; echo "retry $n of 3: $*" >&2; sleep 10; done; } \
+    && retry pacman -S --noconfirm --needed --disable-download-timeout libnotify firefox dolphin systemsettings \
+    && rm -rf /var/cache/pacman/pkg/*
+
+# The signed repository (packages, signed database, public key) is copied in, not
+# bind-mounted: pacman reads it as an unprivileged download user that could not enter a
+# restrictive host mount. Then the same steps as build/verify_install.sh: trust the
+# repository key (the fingerprint is read from the key file itself so that exactly the
+# inspected key is locally signed), enable the repository with mandatory signatures and
+# install the metapackage. Everything it depends on is already present, so only the
+# metapackage itself is added. Finally the repository copy and its pacman.conf section
+# (the last section, appended here) are removed: the guest has no network and the real
+# distribution serves its repository elsewhere.
+COPY repo/ /srv/repo/
+RUN chmod -R a+rX /srv/repo \
+    && fpr="$(gpg --batch --show-keys --with-colons -- "/srv/repo/${DISTRO_NAME}.pub" \
+        | awk -F: '$1 == "fpr" { print $10; exit }')" \
+    && case "$fpr" in ""|*[!0-9A-F]*) echo "no usable key fingerprint" >&2; exit 1 ;; esac \
+    && pacman-key --add "/srv/repo/${DISTRO_NAME}.pub" \
+    && pacman-key --lsign-key "$fpr" \
+    && printf '\n[%s]\nSigLevel = Required DatabaseRequired\nServer = file:///srv/repo/x86_64\n' \
+        "${DISTRO_NAME}" >> /etc/pacman.conf \
+    && pacman -Sy --noconfirm \
+    && pacman -S --noconfirm "${DISTRO_NAME}-desktop" \
+    && rm -rf /var/cache/pacman/pkg/* /srv/repo \
+    && sed -i "/^\[${DISTRO_NAME}\]\$/,\$d" /etc/pacman.conf
+
+# Fail the build early, with a clear message, if a program a state needs is missing:
+# notify-send, the browser, the file manager, System Settings and the KRunner UI.
+RUN for tool in notify-send firefox dolphin systemsettings krunner plasma-apply-colorscheme; do \
+        test -x "/usr/bin/${tool}" || { echo "missing in the image: ${tool}" >&2; exit 1; }; \
+    done
+
+# System-wide settings that make the guest deterministic:
+#   locale     English (US); the locale is generated, not the built-in C.UTF-8, because the
+#              desktop formats dates and numbers from it
+#   timezone   UTC, so no daylight saving rule can move the clock
+#   keyboard   US layout for the virtual keyboard the harness types on
+# The host name is written by build_rootfs.sh (the container engine owns /etc/hostname
+# while a container runs).
+RUN printf 'en_US.UTF-8 UTF-8\n' > /etc/locale.gen \
+    && locale-gen \
+    && printf 'LANG=en_US.UTF-8\n' > /etc/locale.conf \
+    && ln -sfn ../usr/share/zoneinfo/UTC /etc/localtime \
+    && printf 'KEYMAP=us\n' > /etc/vconsole.conf
+
+# Session configuration seen by every new user (copied from /etc/skel by useradd):
+# software rendering for KWin, the fixed output layout (scale 2 on the virtual monitor),
+# wallpaper, animations, notifications, window rules and so on. Every file is a plain
+# data file; the reasons for each setting are in harness/vm/README.md.
+# (Modes in the build context are normalised by build_rootfs.sh.)
+COPY guest/skel/ /etc/skel/
+
+# The fixed desktop user: no password and the password locked (`passwd -l`), so there is
+# no way to log in with a password; SDDM logs it in without one. video/render/input give
+# access to the DRM and input devices.
+RUN useradd --create-home --uid "${DESKTOP_UID}" --user-group \
+        --groups video,render,input,audio --shell /bin/bash "${DESKTOP_USER}" \
+    && passwd --lock "${DESKTOP_USER}"
+
+# The sample folder tree Dolphin shows (fixed files, sizes and modification times).
+# Kept as a script in the build context so that it is readable; it is run once and
+# removed again.
+COPY guest/make-sample-tree.sh /tmp/make-sample-tree.sh
+RUN bash /tmp/make-sample-tree.sh "/home/${DESKTOP_USER}" "${DESKTOP_USER}" \
+    && rm -f /tmp/make-sample-tree.sh
+
+# The places panel of the file manager (a fixed list of places; the disk section is
+# hidden because its usage bar would change with the size of the image). The file
+# lists absolute places, so it is a template in which @HOME@ stands for the home
+# directory of the desktop user; the user name is a build argument and is not
+# written into the repository. The (empty) colour scheme directory is created here as
+# well: the harness puts the generated light and dark schemes into it.
+COPY guest/templates/user-places.xbel /tmp/user-places.xbel.in
+RUN home="/home/${DESKTOP_USER}" \
+    && install -d -o "${DESKTOP_USER}" -g "${DESKTOP_USER}" -m 0755 \
+        "${home}/.local" "${home}/.local/share" "${home}/.local/share/color-schemes" \
+    && sed "s|@HOME@|${home}|g" /tmp/user-places.xbel.in > "${home}/.local/share/user-places.xbel" \
+    && chown "${DESKTOP_USER}:${DESKTOP_USER}" "${home}/.local/share/user-places.xbel" \
+    && chmod 0644 "${home}/.local/share/user-places.xbel" \
+    && rm -f /tmp/user-places.xbel.in
+
+# Files that belong to the system rather than to a user: helper programs for the
+# harness (desktop-run, harness-browser), the browser policy and profile template and
+# the page the browser shows. Copied after all packages so that no package file is
+# shadowed.
+COPY guest/overlay/ /
+
+# SDDM autologin into the Wayland Plasma session (the session file name is the one
+# shipped by plasma-workspace since Plasma 6). DisplayServer=wayland stops SDDM from
+# starting an X server it would not use. Written with printf so that the user name
+# comes from the build argument.
+RUN mkdir -p /etc/sddm.conf.d \
+    && printf '[General]\nDisplayServer=wayland\n\n[Autologin]\nUser=%s\nSession=plasma\nRelogin=false\n' \
+        "${DESKTOP_USER}" > /etc/sddm.conf.d/10-autologin.conf \
+    && test -f /usr/share/wayland-sessions/plasma.desktop
+
+# Boot straight into the graphical target and start the display manager.
+# `systemctl enable` only creates symlinks, so it works without a running systemd.
+RUN systemctl set-default graphical.target \
+    && systemctl enable sddm.service
+
+# No entry point: the container is only ever exported, never run.
+CMD ["/usr/bin/true"]

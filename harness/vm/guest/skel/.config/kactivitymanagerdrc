@@ -1,0 +1,7 @@
+# The one activity of the session. Its id is also written into the desktop layout
+# (plasma-org.kde.plasma.desktop-appletsrc); both must stay equal.
+[activities]
+8b6f2f0a-3c1d-4e57-a1b9-6d2c7e94f5a3=Default
+
+[main]
+currentActivity=8b6f2f0a-3c1d-4e57-a1b9-6d2c7e94f5a3

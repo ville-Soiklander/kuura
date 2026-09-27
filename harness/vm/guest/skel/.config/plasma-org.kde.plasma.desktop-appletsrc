@@ -1,0 +1,168 @@
+# Layout of the desktop and the panel, written out in full instead of being generated on
+# the first login. It is the layout the shell generates by default, with these changes:
+#   * the desktop uses the solid-colour wallpaper plugin with one fixed neutral colour
+#     (Containment 1, Color = 128,128,128; the harness treats this value as a constant)
+#   * the task manager launchers and the favourites of the application launcher are
+#     fixed (no "preferred browser" entry, no application store entry), so the panel and
+#     the launcher look the same whatever else is installed. The launcher reads the
+#     "favorites" list once at its first start and moves it into its own database
+#     (that is what the shell does with its default list as well).
+#   * the network applet is removed from the system tray (its state, "no connection",
+#     is of no interest and can flicker while the network service starts)
+# The activity id must equal the one in kactivitymanagerdrc.
+# Regenerate it after a change of the pinned Plasma version: see harness/vm/README.md.
+
+[ActionPlugins][0]
+RightButton;NoModifier=org.kde.contextmenu
+
+[ActionPlugins][1]
+RightButton;NoModifier=org.kde.contextmenu
+
+[Containments][1]
+ItemGeometries-1280x720=
+ItemGeometriesHorizontal=
+activityId=8b6f2f0a-3c1d-4e57-a1b9-6d2c7e94f5a3
+formfactor=0
+immutability=1
+lastScreen=0
+location=0
+plugin=org.kde.plasma.folder
+wallpaperplugin=org.kde.color
+
+[Containments][1][Wallpaper][org.kde.color][General]
+Color=128,128,128
+
+[Containments][2]
+activityId=
+formfactor=2
+immutability=1
+lastScreen=0
+location=4
+plugin=org.kde.panel
+wallpaperplugin=org.kde.image
+
+[Containments][2][Applets][17]
+immutability=1
+plugin=org.kde.plasma.digitalclock
+
+[Containments][2][Applets][17][Configuration]
+popupHeight=400
+popupWidth=560
+
+[Containments][2][Applets][17][Configuration][Appearance]
+fontWeight=400
+
+[Containments][2][Applets][18]
+immutability=1
+plugin=org.kde.plasma.showdesktop
+
+[Containments][2][Applets][3]
+immutability=1
+plugin=org.kde.plasma.kickoff
+
+# popupHeight is raised from the shell's own default of 400 to 900 to fix a determinism
+# defect (see harness/shots/determinism.py): the launcher's actual popup height is
+# max(popupHeight, the popup content's own implicit height), and the content's implicit
+# height varies by a few logical pixels from boot to boot (same signed image, same
+# steps - the exact QML-internal cause was not identified further, but confirmed narrow:
+# unaffected by restarting plasmashell or reopening the popup within one boot, and
+# unaffected by waiting longer before the first open; only a fresh boot reproduces it,
+# and the variance is bigger, or hit more often, once the desktop-empty state's own
+# reset/settle cycle runs before the popup is opened - a smaller margin (450) that
+# removed the flip in isolation still failed intermittently in the full state sequence).
+# When the content's height exceeds popupHeight on one boot but not another, the popup's
+# overall height differs by that amount and shifts the bottom footer bar (the
+# Applications/Places tabs and the power buttons) by a few pixels, which two-boot
+# determinism checking then reports as ~17,000 differing pixels. 900 exceeds the
+# available screen height above the panel, so the popup is instead clamped to the
+# largest size that fits on screen - a fixed value driven by screen geometry, not by the
+# content's variable implicit height, which is robust to that variance regardless of its
+# size. The trade-off (accepted deliberately): the popup now shows more empty space below
+# the favourites grid than the shell's own default of 400 did; a human reviewing the
+# golden image can revisit this if a tighter layout is wanted later.
+[Containments][2][Applets][3][Configuration]
+popupHeight=900
+popupWidth=560
+
+[Containments][2][Applets][3][Configuration][General]
+favorites=systemsettings.desktop,org.kde.dolphin.desktop,org.kde.konsole.desktop
+
+[Containments][2][Applets][4]
+immutability=1
+plugin=org.kde.plasma.pager
+
+[Containments][2][Applets][5]
+immutability=1
+plugin=org.kde.plasma.icontasks
+
+[Containments][2][Applets][5][Configuration][General]
+launchers=applications:systemsettings.desktop,applications:org.kde.dolphin.desktop,applications:org.kde.konsole.desktop
+
+[Containments][2][Applets][6]
+immutability=1
+plugin=org.kde.plasma.marginsseparator
+
+[Containments][2][Applets][7]
+activityId=
+formfactor=0
+immutability=1
+lastScreen=-1
+location=0
+plugin=org.kde.plasma.systemtray
+popupHeight=432
+popupWidth=432
+wallpaperplugin=org.kde.image
+
+[Containments][2][Applets][7][Applets][10]
+immutability=1
+plugin=org.kde.plasma.keyboardlayout
+
+[Containments][2][Applets][7][Applets][11]
+immutability=1
+plugin=org.kde.kscreen
+
+[Containments][2][Applets][7][Applets][12]
+immutability=1
+plugin=org.kde.plasma.manage-inputmethod
+
+[Containments][2][Applets][7][Applets][13]
+immutability=1
+plugin=org.kde.plasma.devicenotifier
+
+[Containments][2][Applets][7][Applets][14]
+immutability=1
+plugin=org.kde.plasma.clipboard
+
+[Containments][2][Applets][7][Applets][15]
+immutability=1
+plugin=org.kde.plasma.notifications
+
+[Containments][2][Applets][7][Applets][16]
+immutability=1
+plugin=org.kde.plasma.volume
+
+[Containments][2][Applets][7][Applets][16][Configuration][General]
+migrated=true
+
+[Containments][2][Applets][7][Applets][19]
+immutability=1
+plugin=org.kde.plasma.brightness
+
+[Containments][2][Applets][7][Applets][20]
+immutability=1
+plugin=org.kde.plasma.battery
+
+[Containments][2][Applets][7][Applets][8]
+immutability=1
+plugin=org.kde.plasma.cameraindicator
+
+[Containments][2][Applets][7][General]
+extraItems=org.kde.plasma.battery,org.kde.plasma.brightness,org.kde.plasma.cameraindicator,org.kde.plasma.keyboardlayout,org.kde.kscreen,org.kde.plasma.manage-inputmethod,org.kde.plasma.mediacontroller,org.kde.plasma.devicenotifier,org.kde.plasma.clipboard,org.kde.plasma.notifications,org.kde.plasma.volume
+knownItems=org.kde.plasma.battery,org.kde.plasma.brightness,org.kde.plasma.cameraindicator,org.kde.plasma.networkmanagement,org.kde.plasma.keyboardlayout,org.kde.kscreen,org.kde.plasma.manage-inputmethod,org.kde.plasma.mediacontroller,org.kde.plasma.devicenotifier,org.kde.plasma.clipboard,org.kde.plasma.notifications,org.kde.plasma.volume
+
+[Containments][2][General]
+AppletOrder=3;4;5;6;7;17;18
+
+[ScreenMapping]
+itemsOnDisabledScreens=
+screenMapping=

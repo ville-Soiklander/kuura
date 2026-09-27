@@ -1,0 +1,112 @@
+# Guest root filesystem for the screenshot-harness feasibility spike.
+#
+# The image is a normal Arch system frozen to the same archive snapshot as the
+# package build (see docs/BUILD_CONTRACT.md), with the metapackage installed from
+# the signed repository exactly as build/verify_install.sh does it. The container
+# filesystem is later exported and turned into an ext4 disk image WITHOUT mounting
+# anything (see build_rootfs.sh), so the whole flow works with rootless Podman.
+#
+# Build it only through build_rootfs.sh: it stages the build context (this file,
+# guest/ and a copy of the repository in repo/) and passes the build arguments.
+
+FROM docker.io/library/archlinux:base
+
+# Snapshot date (YYYY/MM/DD) and codename, supplied by build_rootfs.sh from the
+# project configuration. Nothing is hard coded here.
+ARG ARCH_ARCHIVE_DATE
+ARG DISTRO_NAME
+# Fixed unprivileged account that the display manager logs in automatically.
+ARG DESKTOP_USER=desktop
+ARG DESKTOP_UID=1000
+
+# Point pacman at the dated archive snapshot only. printf keeps $repo and $arch
+# literal (pacman expands them). Both values end up in a URL / a package name,
+# so they are validated first.
+RUN case "${ARCH_ARCHIVE_DATE}" in \
+        [0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]) ;; \
+        *) echo "ARCH_ARCHIVE_DATE must have the form YYYY/MM/DD" >&2; exit 1 ;; \
+    esac \
+    && case "${DISTRO_NAME}" in \
+        ""|*[!a-z0-9_-]*) echo "DISTRO_NAME may only contain a-z, 0-9, _ and -" >&2; exit 1 ;; \
+    esac \
+    && printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' \
+        "${ARCH_ARCHIVE_DATE}" > /etc/pacman.d/mirrorlist
+
+# The signed repository (packages, signed database, public key) is copied in, not
+# bind-mounted: pacman reads it as an unprivileged download user that could not
+# enter a restrictive host mount. It is removed again at the end of this file.
+COPY repo/ /srv/repo/
+RUN chmod -R a+rX /srv/repo
+
+# Trust the repository key and enable the repository with mandatory signatures,
+# the same steps as build/verify_install.sh. The fingerprint is read from the key
+# file itself so that exactly the inspected key is locally signed.
+RUN pacman-key --init \
+    && pacman-key --populate archlinux \
+    && fpr="$(gpg --batch --show-keys --with-colons -- "/srv/repo/${DISTRO_NAME}.pub" \
+        | awk -F: '$1 == "fpr" { print $10; exit }')" \
+    && case "$fpr" in ""|*[!0-9A-F]*) echo "no usable key fingerprint" >&2; exit 1 ;; esac \
+    && pacman-key --add "/srv/repo/${DISTRO_NAME}.pub" \
+    && pacman-key --lsign-key "$fpr" \
+    && printf '\n[%s]\nSigLevel = Required DatabaseRequired\nServer = file:///srv/repo/x86_64\n' \
+        "${DISTRO_NAME}" >> /etc/pacman.conf
+
+# WHY before the package install: mkinitcpio runs from a pacman hook when the
+# kernel is installed. Without this drop-in it would use the default hook list
+# with `autodetect`, which inspects the modules loaded on the BUILD HOST and would
+# leave virtio_blk/ext4 out of the initramfs. The explicit module list makes the
+# initramfs independent of the machine that built it.
+COPY guest/mkinitcpio-vm.conf /etc/mkinitcpio.conf.d/vm.conf
+
+# Full upgrade to the snapshot (-uu allows downgrades, so the result matches the
+# snapshot exactly), then the system pieces a VM needs on top of the metapackage:
+#   linux, mkinitcpio   kernel and initramfs generator (used for direct kernel boot)
+#   qemu-guest-agent    lets the host ask "is the session up?" without a login
+#   mesa                OpenGL/EGL implementation incl. the llvmpipe software renderer
+#   <distro>-desktop    the metapackage under test (Plasma session, KWin, SDDM, ...)
+RUN pacman -Sy --noconfirm archlinux-keyring \
+    && pacman -Syuu --noconfirm \
+    && pacman -S --noconfirm --needed \
+        base linux mkinitcpio qemu-guest-agent mesa "${DISTRO_NAME}-desktop" \
+    && rm -rf /var/cache/pacman/pkg/*
+
+# The repository only existed to install from; the guest has no network and the
+# real distribution serves its repository elsewhere. Remove the copy and the
+# pacman.conf section (it is the last section, appended above).
+RUN rm -rf /srv/repo \
+    && sed -i "/^\[${DISTRO_NAME}\]\$/,\$d" /etc/pacman.conf
+
+# Session configuration seen by every new user (copied from /etc/skel by useradd):
+# software-rendering environment for KWin, indexer and screen locker switched off,
+# and the output layout: scale 2 on the virtual monitor (2560x1440 -> logical
+# 1280x720). The layout file was produced by `kscreen-doctor output.Virtual-1.scale.2`
+# in a running guest; it is matched by the EDID hash of the virtio-vga monitor,
+# which QEMU derives from the resolution, so it is valid for 2560x1440 only.
+COPY guest/skel/ /etc/skel/
+
+# The fixed desktop user: no password and the password locked (`passwd -l`), so
+# there is no way to log in with a password; SDDM logs it in without one.
+# video/render/input give access to the DRM and input devices.
+RUN useradd --create-home --uid "${DESKTOP_UID}" --user-group \
+        --groups video,render,input,audio --shell /bin/bash "${DESKTOP_USER}" \
+    && passwd --lock "${DESKTOP_USER}" \
+    && chmod 0755 "/home/${DESKTOP_USER}/.config/plasma-workspace/env/"*.sh
+
+# SDDM autologin into the Wayland Plasma session (the session file name is the
+# one shipped by plasma-workspace since Plasma 6). DisplayServer=wayland stops
+# SDDM from starting an X server it would not use. Written with printf so that
+# the user name comes from the build argument.
+RUN mkdir -p /etc/sddm.conf.d \
+    && printf '[General]\nDisplayServer=wayland\n\n[Autologin]\nUser=%s\nSession=plasma\nRelogin=false\n' \
+        "${DESKTOP_USER}" > /etc/sddm.conf.d/10-autologin.conf \
+    && test -f /usr/share/wayland-sessions/plasma.desktop
+
+# Boot straight into the graphical target and start the display manager.
+# `systemctl enable` only creates symlinks, so it works without a running systemd.
+# UTF-8 locale without generating any locale files (C.UTF-8 is built into glibc).
+RUN systemctl set-default graphical.target \
+    && systemctl enable sddm.service \
+    && printf 'LANG=C.UTF-8\n' > /etc/locale.conf
+
+# No entry point: the container is only ever exported, never run.
+CMD ["/usr/bin/true"]

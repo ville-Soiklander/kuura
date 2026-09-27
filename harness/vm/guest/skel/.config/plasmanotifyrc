@@ -1,0 +1,5 @@
+# Notification pop-ups stay on screen until they are closed, so the `notification` state
+# can be captured whenever the desktop has settled (the default is to hide them after a
+# few seconds).
+[Notifications]
+PopupTimeout=0

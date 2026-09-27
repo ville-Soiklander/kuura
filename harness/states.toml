@@ -1,0 +1,111 @@
+# State and mode definitions of the screenshot harness.
+# Schema: docs/HARNESS_CONTRACT.md ("states.toml"); validated by harness/shots/states.py.
+#
+# Every coordinate is in PHYSICAL pixels of the 2560x1440 display (output scale 2, so
+# logical 1280x720). Until the bespoke components exist, each state is defined with the
+# stock component that plays its role; the description says which one.
+
+[settings]
+resolution = [2560, 1440]
+settle_frames = 2
+settle_interval_s = 1.0
+settle_timeout_s = 45
+# Must be later than the archive snapshot date (else the guest clock jumps forward).
+rtc_base = "2026-09-25T12:00:00"
+
+# Steps that run before EVERY state, so each state starts from the same empty desktop:
+#   1. close any open menu, overlay or runner
+#   2. stop the programs the states start (and wait until they are really gone, or the
+#      next screenshot could still show the closing window) and close every
+#      notification (the ids restart at 1 in a fresh session, so a small range is enough)
+#   3. park the pointer on the bare desktop, away from every panel icon (a tooltip or
+#      hover highlight left behind would leak into the next state)
+reset = [
+    { key = "escape" },
+    { key = "escape" },
+    { run = ["sh", "-c", "pkill -x 'dolphin|systemsettings|firefox'; for n in $(seq 1 60); do pgrep -x 'dolphin|systemsettings|firefox' >/dev/null || break; sleep 0.2; done; for id in 1 2 3 4 5 6; do gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.CloseNotification \"$id\" >/dev/null 2>&1; done; true"], wait_exit = true },
+    { move = [1280, 700] },
+]
+
+[defaults]
+tolerance = 3
+max_diff_ratio = 0.0005
+# The panel clock (bottom right); it shows the time and changes every minute.
+mask = [[2300, 1340, 2560, 1440]]
+
+[modes.light]
+scheme = "light"
+[modes.dark]
+scheme = "dark"
+
+[[state]]
+name = "desktop-empty"
+description = "Empty desktop with the stock panel; the panel plays the role of the future shelf and menubar."
+steps = []
+
+[[state]]
+name = "menubar-open"
+description = "Application launcher opened by a click on its panel icon; the stock launcher menu plays the role of the future menubar menu."
+steps = [
+    { click = [69, 1379] },
+    { settle = true },
+]
+
+[[state]]
+name = "shelf-hover"
+description = "Pointer resting on a panel icon (highlight and tooltip); the stock task icons play the role of the future shelf."
+steps = [
+    { move = [169, 1379] },
+    { wait = 2 },
+    { settle = true },
+]
+
+[[state]]
+name = "overview"
+description = "Overview effect opened with its shortcut; the stock Overview effect plays the role of the future overview surface."
+steps = [
+    { key = "meta+w" },
+    { settle = true },
+]
+
+[[state]]
+name = "search-open"
+description = "Runner opened with its shortcut and the word files typed; the stock runner plays the role of the future search surface."
+steps = [
+    { key = "alt+space" },
+    { settle = true },
+    { type = "files" },
+    { settle = true },
+]
+
+[[state]]
+name = "files-window"
+description = "File manager window on the fixed sample folder; the stock file manager plays the role of the future files app."
+steps = [
+    { run = ["dolphin", "Documents"] },
+    { settle = true },
+]
+
+[[state]]
+name = "settings-window"
+description = "System settings window; the stock settings application plays the role of the future settings app."
+steps = [
+    { run = ["systemsettings"] },
+    { settle = true },
+]
+
+[[state]]
+name = "notification"
+description = "Desktop notification with a fixed summary and body that stays until closed; the stock notification pop-up plays the role of the future one."
+steps = [
+    { run = ["notify-send", "--app-name", "harness", "--expire-time", "0", "Sample notification", "Body text of the sample notification"] },
+    { settle = true },
+]
+
+[[state]]
+name = "browser-window"
+description = "Test browser window on a local static page; the stock browser plays the role of the future browser window."
+steps = [
+    { run = ["harness-browser"] },
+    { settle = true },
+]

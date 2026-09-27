@@ -1,0 +1,24 @@
+# Power management: never dim, blank or suspend. A capture session can run longer than the
+# default idle timeouts, and a dimmed or blank screen would ruin every screenshot.
+# (A virtual machine has no battery, so only the mains profile is used; the other two
+# are set the same for completeness.)
+[AC][Display]
+DimDisplayWhenIdle=false
+TurnOffDisplayWhenIdle=false
+
+[AC][SuspendAndShutdown]
+AutoSuspendAction=0
+
+[Battery][Display]
+DimDisplayWhenIdle=false
+TurnOffDisplayWhenIdle=false
+
+[Battery][SuspendAndShutdown]
+AutoSuspendAction=0
+
+[LowBattery][Display]
+DimDisplayWhenIdle=false
+TurnOffDisplayWhenIdle=false
+
+[LowBattery][SuspendAndShutdown]
+AutoSuspendAction=0

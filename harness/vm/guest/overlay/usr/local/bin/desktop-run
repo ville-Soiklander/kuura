@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# desktop-run - start a program inside the running desktop session of the desktop user.
+#
+# The guest agent runs as root, outside the graphical session. A GUI program started
+# from there would find neither the session bus nor the Wayland display. This helper
+# starts the program AS THE DESKTOP USER with the environment of the running session
+# (session bus, Wayland display, desktop and rendering variables).
+#
+# The desktop user is the only account with a user id in the normal range (the image
+# has exactly one), so no user name is stored anywhere.
+#
+# Usage: desktop-run [--wait] [--] PROGRAM [ARGS...]
+#   default   start PROGRAM detached (own session, output discarded) and return at once
+#   --wait    run PROGRAM in the foreground, pass its output through and return its
+#             exit status
+# Exit status: the program's own with --wait; otherwise 0 once started.
+# 2 = bad usage, 3 = the desktop session is not running (yet).
+
+set -euo pipefail
+
+# die STATUS MESSAGE...  Error message on stderr and exit with STATUS.
+die() {
+    local status="$1"
+    shift
+    printf 'desktop-run: error: %s\n' "$*" >&2
+    exit "$status"
+}
+
+# find_desktop_user
+# Prints the name of the account with a user id from 1000 to 59999 (the desktop user).
+find_desktop_user() {
+    getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 { print $1; exit }'
+}
+
+# main ARGS...
+# Parses the options, collects the session environment and starts the program.
+main() {
+    local wait_exit=0
+    if [ "${1:-}" = "--wait" ]; then
+        wait_exit=1
+        shift
+    fi
+    if [ "${1:-}" = "--" ]; then
+        shift
+    fi
+    [ "$#" -ge 1 ] || die 2 "usage: desktop-run [--wait] [--] PROGRAM [ARGS...]"
+
+    local user uid home runtime
+    user="$(find_desktop_user)"
+    [ -n "$user" ] || die 2 "no desktop user found"
+    uid="$(id -u "$user")"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    runtime="/run/user/$uid"
+    # The runtime directory and the bus socket only exist while the session is up.
+    [ -S "$runtime/bus" ] || die 3 "the desktop session is not running (no $runtime/bus)"
+
+    # Defaults first, then the environment the running session exported to its user
+    # manager: later assignments win in env(1), so what the session really uses
+    # overrides these defaults, and the defaults fill in what it does not export.
+    # The program starts with an EMPTY environment plus these variables (env -i), so
+    # nothing of the root-owned guest agent's environment leaks into the session.
+    local -a vars=(
+        "PATH=/usr/local/bin:/usr/bin" "HOME=$home" "USER=$user" "LOGNAME=$user"
+        "XDG_RUNTIME_DIR=$runtime"
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus"
+        "WAYLAND_DISPLAY=wayland-0"
+        "XDG_SESSION_TYPE=wayland" "XDG_CURRENT_DESKTOP=KDE"
+        "KDE_FULL_SESSION=true" "KDE_SESSION_VERSION=6"
+        "LIBGL_ALWAYS_SOFTWARE=1" "MESA_LOADER_DRIVER_OVERRIDE=kms_swrast"
+    )
+    local line
+    while IFS= read -r line; do
+        # Only plain NAME=value lines; the quoted forms (NAME=$'...') are skipped.
+        if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^\$] ]]; then
+            vars+=("$line")
+        fi
+    done < <(runuser -u "$user" -- env "XDG_RUNTIME_DIR=$runtime" \
+                 "DBUS_SESSION_BUS_ADDRESS=unix:path=$runtime/bus" \
+                 systemctl --user show-environment 2>/dev/null || true)
+
+    if [ "$wait_exit" -eq 1 ]; then
+        exec runuser -u "$user" -- env -i -C "$home" "${vars[@]}" "$@"
+    fi
+    # Detached: a new session so that the program outlives this helper and the guest
+    # agent, and no inherited file descriptor keeps the agent's pipes open.
+    setsid --fork runuser -u "$user" -- env -i -C "$home" "${vars[@]}" "$@" \
+        </dev/null >/dev/null 2>&1
+}
+
+main "$@"

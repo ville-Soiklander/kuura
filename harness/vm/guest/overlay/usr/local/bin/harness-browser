@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# harness-browser - open the fixed local test page in a fresh browser profile.
+#
+# TEST IMAGE ONLY. Used by the `browser-window` state of the screenshot harness (start
+# it through `desktop-run harness-browser`, so that it runs in the desktop session).
+#
+# WHY a wrapper: the state must not depend on anything a previous launch left behind.
+# Every start therefore copies the profile template (preferences that switch off first-run
+# pages, updates, telemetry and restore prompts) into a NEW empty profile directory below
+# the session's runtime directory (a RAM disk, removed at logout), and --no-remote keeps
+# the browser from attaching to an instance that already runs.
+#
+# Usage: harness-browser [FILE]
+#   FILE  absolute path of a local file to open (default: the fixed sample page)
+
+set -euo pipefail
+
+# Directory with the profile template and the sample page (from the image overlay).
+readonly SHARE_DIR="/usr/local/share/harness"
+# Window size in logical pixels; must equal the size in the browser rule of kwinrulesrc.
+readonly WINDOW_WIDTH=1000
+readonly WINDOW_HEIGHT=600
+
+# die MESSAGE...  Error message on stderr and non-zero exit.
+die() { printf 'harness-browser: error: %s\n' "$*" >&2; exit 1; }
+
+# main ARGS...
+# Validates the optional file argument, prepares a fresh profile and replaces this
+# process with the browser.
+main() {
+    [ "$#" -le 1 ] || die "usage: harness-browser [FILE]"
+    local page="${1:-$SHARE_DIR/browser-page.html}"
+    # The path becomes part of a file:// URL, so only plain absolute paths are accepted.
+    [[ "$page" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "FILE must be a plain absolute path"
+    [ -f "$page" ] || die "FILE does not exist"
+    [ -f "$SHARE_DIR/firefox-profile/user.js" ] || die "profile template is missing"
+
+    local base="${XDG_RUNTIME_DIR:-/tmp}"
+    local profile
+    profile="$(mktemp -d "$base/harness-browser.XXXXXX")"
+    cp -- "$SHARE_DIR/firefox-profile/user.js" "$profile/user.js"
+
+    # --width/--height: the window size in logical pixels. The window rule of the
+    # session (kwinrulesrc) fixes the position and asks for the same size, but this
+    # browser does not follow a size that is forced from outside, so it is given here.
+    exec firefox --no-remote --profile "$profile" --width "$WINDOW_WIDTH" --height "$WINDOW_HEIGHT" \
+        --new-window "file://$page"
+}
+
+main "$@"
