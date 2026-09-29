@@ -369,8 +369,13 @@ class Vm:
         """
         run_dir = Path(tempfile.mkdtemp(prefix="vm-"))
         # mkdtemp already creates it with mode 0700; the explicit chmod documents and
-        # enforces the requirement even if that ever changes.
-        os.chmod(run_dir, 0o700)
+        # enforces the requirement even if that ever changes. 0700 (owner-only) is the
+        # restrictive end of the permission range, not the permissive one - Semgrep's
+        # generic insecure-file-permissions rule reads 0700 as "too open" using a
+        # heuristic tuned for regular files, which does not apply to a directory that
+        # must deny group/other access entirely; the 0o644 it suggests would not even
+        # be traversable.
+        os.chmod(run_dir, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
         self._run_dir = run_dir
         return run_dir
 
