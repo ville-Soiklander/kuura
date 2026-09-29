@@ -1,0 +1,12 @@
+{
+    "KPlugin": {
+        "Category": "Appearance",
+        "Description": "Glass material (blur, edge refraction, specular highlight, dither noise) for the desktop shell's own translucent surfaces",
+        "EnabledByDefault": true,
+        "License": "GPL-3.0-or-later",
+        "Name": "Frost"
+    },
+    "org.kde.kwin.effect": {
+        "enabledByDefaultMethod": true
+    }
+}

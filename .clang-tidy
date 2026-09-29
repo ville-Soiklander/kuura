@@ -1,0 +1,43 @@
+# clang-tidy configuration for this project's C++ code (packages/kuura-frost/,
+# the first C++ this project ships -- see docs/BUILD_CONTRACT.md's history and
+# scripts/run_static_analysis.ps1 for why this exists now: Semgrep's own C++
+# parser is unreliable for modern C++ (silently skips translation units using
+# C++17+ constructs it does not understand while still reporting "0 findings"),
+# so clang-tidy is this project's real C++ static analysis, not a supplement.
+#
+# Check groups, and why each is included:
+#   clang-analyzer-*      real static-analysis passes (UB, null derefs, leaks)
+#   bugprone-*            common real-bug patterns
+#   cppcoreguidelines-*   C++ Core Guidelines (lifetimes, ownership, casts) --
+#                         directly relevant to a GL/shader-resource-owning
+#                         KWin effect plugin (Vaihe 4)
+#   modernize-*           idiomatic C++20 usage (this project targets C++20,
+#                         see packages/kuura-frost/CMakeLists.txt)
+#   performance-*         relevant given Vaihe 4's explicit per-frame budget
+#   portability-*         this code only ever targets the pinned Arch/Linux
+#                         toolchain (see build/Containerfile), but the check
+#                         group is cheap and catches real non-portable
+#                         constructs that are also just bad practice
+#
+# Excluded, with reasons (do not remove without understanding why):
+#   -cppcoreguidelines-avoid-magic-numbers, -readability-magic-numbers
+#     Shader/graphics code is inherently full of small numeric constants
+#     (uniform locations, channel indices, matrix sizes) that a "magic
+#     number" check would flag near-universally with no real bug behind it.
+#   -modernize-use-trailing-return-type
+#     Purely stylistic; this project's existing style (see any .py generator
+#     for the analogous convention) does not use trailing return types.
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  cppcoreguidelines-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -readability-magic-numbers,
+  -modernize-use-trailing-return-type
+
+WarningsAsErrors: ""
+HeaderFilterRegex: '.*packages/kuura-.*/src/.*'
+FormatStyle: none
