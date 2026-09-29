@@ -1,0 +1,88 @@
+# Window decoration, titlebar-button placement, corner style and Overview-effect
+# tuning for new users of the desktop shell (V3 of the working brief). Installed to
+# /etc/skel/.config/kwinrc by the kuura-shell package (docs/SHELL_CONTRACT.md), so a
+# brand-new account picks it up on first login, the same way harness/vm/guest/skel
+# ships a (separate, test-only) kwinrc for the screenshot harness.
+#
+# WHY these specific keys and no others: found by booting the pinned guest image
+# (kwin 6.7.5-1, kdecoration 6.7.5-1, breeze 6.7.5-1 - confirmed with
+# `pacman -Q kwin kdecoration breeze` in the guest) and testing each one live with
+# `kwriteconfig6 --file kwinrc ...` followed by
+# `qdbus6 org.kde.KWin /KWin org.kde.KWin.reconfigure`, screenshotting before/after.
+# Nothing here is a guessed key name - see the V3 investigation notes handed back
+# with this change for the full trail (commands run, exact output, screenshots).
+#
+# ---- Window buttons on the left [Windows] ----
+# ButtonsOnLeft / ButtonsOnRight are exactly the well-documented KWin keys the brief
+# expected. Letters are KDecoration3's standard button codes: I=minimize, A=maximize,
+# X=close. All three move to the left edge of the titlebar; the right side is empty.
+#
+# ---- Border size [org.kde.kdecoration2] ----
+# KWin 6.7.5 still uses this LEGACY group name (not a new "kdecoration3" one) for the
+# decoration's border-size choice - confirmed live: the "Window Decorations" KCM
+# writes exactly this key when a preset other than its own top entry is picked.
+# BorderSizeAuto=false selects the explicit "Normal window borders" preset instead of
+# the KCM's default entry, labelled "Theme default (No window borders)" (see the
+# CAVEAT below - this entry's name is a real, visible symptom of the open issue).
+#
+# ---- Corner rounding [Windeco] ----
+# RoundedCorners is the ONLY corner-radius lever the stock Breeze decoration exposes.
+# Confirmed by scanning the compiled decoration plugin and its KCM
+# (kcm_breezedecoration.so, org.kde.breeze.so) for every config-key-shaped string:
+# "roundedCorners"/"RoundedCorners" and "ShadowStrength" exist; there is NO numeric
+# pixel-radius key and NO material/inner-shadow key anywhere in either binary.
+# This boolean only toggles Breeze's own small, fixed corner radius (a few px) on or
+# off - it CANNOT reach design/tokens.json's radius.window=14 or the
+# material.inner_shadow values. Reaching those needs a bespoke Aurorae theme (KWin's
+# XML+SVG decoration format: new SVG assets, materially more work than a config
+# file). Per docs/SHELL_CONTRACT.md's own instruction, that is NOT built here - it is
+# reported as a scope question for the orchestrator/owner to decide on, not guessed
+# or hand-rolled. RoundedCorners=true is still set because it is the correct,
+# directionally-right, zero-cost choice while that decision is pending.
+#
+# ---- CAVEAT: visual effect not provable live in this image (report this) ----
+# In the current guest image, EVERY window observed - including the already-approved
+# V2 golden screenshots (harness/goldens/*/files-window.png) - renders a plain,
+# generic titlebar (an icon, a centred title, one dropdown chevron and a close
+# button), not Breeze's normal three-button chrome, regardless of any key below.
+# Across repeated live tests, kwriteconfig6 always exits 0, `cat kwinrc` always shows
+# the value written, and `qdbus6 ... reconfigure` always exits 0 with no error - yet
+# the rendered window never changed, including after explicitly pinning
+# [org.kde.kdecoration2] library=org.kde.breeze (that specific key pair did not even
+# persist through a reconfigure). This pre-dates this change (the V2 goldens already
+# show it) and is not something this file introduces. The values below are the
+# correct, verified-real KDE keys and are safe to ship, but their visual effect needs
+# a follow-up investigation beyond config (most likely something in KWin's decoration
+# plugin loading, not a wrong key name) before it can be called done.
+[Windows]
+ButtonsOnLeft=IAX
+ButtonsOnRight=
+
+[org.kde.kdecoration2]
+BorderSizeAuto=false
+
+[Windeco]
+RoundedCorners=true
+
+# ---- Overview effect tuning [Effect-overview] ----
+# This is the real, confirmed config group: kwriteconfig6 writes to it and
+# `cat kwinrc` reads the value straight back after a reconfigure (unlike the
+# decoration case above, this one round-trips cleanly). The effect's own KCM plugin
+# (kwin_overview_config.so) was scanned the same way as Breeze's and exposes exactly
+# two settings - IgnoreMinimized and OrganizedGrid - nothing else. There is NO
+# spacing/gap/margin key and NO per-effect animation-duration or easing-curve key for
+# Overview anywhere in this build. The only animation-speed lever in the whole
+# desktop is kdeglobals' global AnimationDurationFactor, which is a unitless
+# multiplier applied to every effect's own hard-coded duration - it is not the same
+# kind of value as design/tokens.json's motion.duration.base (260, an absolute
+# millisecond count) or motion.easing_standard (a cubic-bezier curve), and mapping
+# either onto it would be an approximation dressed up as a real mapping. Per the
+# brief's own instruction not to approximate, neither token is used here.
+# OrganizedGrid=true is the one genuine, verified layout/spacing lever the effect
+# exposes (thumbnails arrange on a clean grid instead of a free-form layout - this is
+# the closest real equivalent to a "spacing" control that this effect actually has).
+# IgnoreMinimized=true hides minimized windows from the overview, a sensible default
+# that was already very likely KWin's own compiled default (this pins it explicitly).
+[Effect-overview]
+IgnoreMinimized=true
+OrganizedGrid=true

@@ -2,8 +2,12 @@
 # Schema: docs/HARNESS_CONTRACT.md ("states.toml"); validated by harness/shots/states.py.
 #
 # Every coordinate is in PHYSICAL pixels of the 2560x1440 display (output scale 2, so
-# logical 1280x720). Until the bespoke components exist, each state is defined with the
-# stock component that plays its role; the description says which one.
+# logical 1280x720). V3 (docs/SHELL_CONTRACT.md) made the panel layout real
+# (desktop-empty, menubar-open, shelf-hover now describe the real menubar/shelf, not a
+# stand-in). Everything else still stands in for a bespoke surface that does not exist
+# yet (overview, search-open, and the window decoration seen in every *-window state,
+# still a generic titlebar - see SHELL_CONTRACT's "Known issue"); the description of
+# each such state says which stock component plays the role.
 
 [settings]
 resolution = [2560, 1440]
@@ -23,15 +27,19 @@ rtc_base = "2026-09-25T12:00:00"
 reset = [
     { key = "escape" },
     { key = "escape" },
-    { run = ["sh", "-c", "pkill -x 'dolphin|systemsettings|firefox'; for n in $(seq 1 60); do pgrep -x 'dolphin|systemsettings|firefox' >/dev/null || break; sleep 0.2; done; for id in 1 2 3 4 5 6; do gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.CloseNotification \"$id\" >/dev/null 2>&1; done; true"], wait_exit = true },
+    { run = ["sh", "-c", "pkill -x 'dolphin|systemsettings|firefox|mousepad'; for n in $(seq 1 60); do pgrep -x 'dolphin|systemsettings|firefox|mousepad' >/dev/null || break; sleep 0.2; done; for id in 1 2 3 4 5 6; do gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.CloseNotification \"$id\" >/dev/null 2>&1; done; true"], wait_exit = true },
     { move = [1280, 700] },
 ]
 
 [defaults]
 tolerance = 3
 max_diff_ratio = 0.0005
-# The panel clock (bottom right); it shows the time and changes every minute.
-mask = [[2300, 1340, 2560, 1440]]
+# The panel clock. V3 moved it from the bottom-right of the old single stock panel
+# into the top-right of the new, real 52px-tall (26 logical px) top menubar panel -
+# measured live from a real screenshot of the packaged image (not guessed from the
+# token value alone): the "12:00 PM" / date text sits inside roughly x=[2450,2560],
+# y=[5,50]; this mask is padded on both axes for different digit widths/dates.
+mask = [[2420, 0, 2560, 55]]
 
 [modes.light]
 scheme = "light"
@@ -40,22 +48,22 @@ scheme = "dark"
 
 [[state]]
 name = "desktop-empty"
-description = "Empty desktop with the stock panel; the panel plays the role of the future shelf and menubar."
+description = "Empty desktop with the real panel layout: a top menubar (application menu button, Global Menu, system tray, clock) and a floating bottom shelf (Icons-only Task Manager)."
 steps = []
 
 [[state]]
 name = "menubar-open"
-description = "Application launcher opened by a click on its panel icon; the stock launcher menu plays the role of the future menubar menu."
+description = "Application launcher (Kickoff) opened by a click on its icon at the left end of the real top menubar."
 steps = [
-    { click = [69, 1379] },
+    { click = [26, 26] },
     { settle = true },
 ]
 
 [[state]]
 name = "shelf-hover"
-description = "Pointer resting on a panel icon (highlight and tooltip); the stock task icons play the role of the future shelf."
+description = "Pointer resting on a task icon in the real floating bottom shelf (highlight and tooltip)."
 steps = [
-    { move = [169, 1379] },
+    { move = [1089, 1420] },
     { wait = 2 },
     { settle = true },
 ]
@@ -107,5 +115,33 @@ name = "browser-window"
 description = "Test browser window on a local static page; the stock browser plays the role of the future browser window."
 steps = [
     { run = ["harness-browser"] },
+    { settle = true },
+]
+
+# GTK half of the global-menu DoD (docs/SHELL_CONTRACT.md's "Verification" section,
+# point 1). Firefox was verified live NOT to qualify (see the implementing agent's
+# report: no com.canonical.AppMenu.Registrar activity, and its own window shows no
+# traditional menu bar), so the project's own documented fallback applies - a small,
+# explicitly test-only GTK application, following harness-browser's precedent
+# (Mousepad + appmenu-gtk-module, see harness/vm/Containerfile and
+# guest/skel/.config/plasma-workspace/env/20-gtk-appmenu.sh).
+#
+# STILL OPEN, reported rather than papered over (mirrors the KWin decoration "Known
+# issue" in docs/SHELL_CONTRACT.md): live testing confirms Mousepad's OWN in-window
+# menu bar disappears once appmenu-gtk-module is loaded (it hands its menu off) and
+# the D-Bus registrar/proxy services activate - but the panel's Global Menu widget
+# still renders NOTHING for it, even though the exact same widget correctly shows
+# Dolphin's (Qt) menu in this same image. The gap is therefore narrower than "GTK
+# menus do not work at all": it is specifically the KWin/XWayland-side relay from an
+# appmenu-gtk-module-exported window to the panel widget, not proven here to be
+# fixable without a deeper investigation than this state's own scope. Treat any
+# goldens captured for this state as showing the CURRENT (empty) Global Menu area for
+# a GTK app, not a working one - say so in the review rather than approving it as
+# correct.
+[[state]]
+name = "app-menu-gtk"
+description = "Test-only GTK text editor (Mousepad) focused, its own menu bar suppressed; the Global Menu widget does not show it yet (open gap, see comment above)."
+steps = [
+    { run = ["mousepad", "Notes.txt"] },
     { settle = true },
 ]

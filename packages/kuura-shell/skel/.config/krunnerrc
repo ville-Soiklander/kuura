@@ -1,0 +1,92 @@
+# KRunner theming for new users of the desktop shell (V3 of the working brief,
+# docs/SHELL_CONTRACT.md scope item 4: "KRunner: centred floating panel, material
+# driven by tokens"). Installed to /etc/skel/.config/krunnerrc by the kuura-shell
+# package, the same mechanism as the sibling kwinrc/kglobalshortcutsrc/kdeglobals
+# skel files in this directory.
+#
+# WHY this one key and no others: found by booting the pinned guest image
+# (krunner 6.30.0-1, plasma-workspace 6.7.5-1, kwin 6.7.5-1 - confirmed with
+# `pacman -Q krunner plasma-workspace kwin plasma-desktop frameworkintegration
+# kirigami-addons` in the guest) and reading KRunner's OWN KConfigXT schema,
+# `/usr/share/config.kcfg/krunnersettingsbase.kcfg`. That file (`kcfgfile
+# name="krunnerrc"`, group "General") declares exactly three entries -
+# freeFloating (key FreeFloating, Bool, default false), historyBehavior (Enum:
+# Disabled/ImmediateCompletion/CompletionSuggestion, default
+# CompletionSuggestion) and retainPriorSearch (key RetainPriorSearch, Bool,
+# default true) - and nothing else. Cross-checked against the compiled Behavior
+# KCM (`kcm_krunnersettings.so`, scanned with `strings -a` the same way
+# kwinrc's decoration/overview findings were): it exposes the standard
+# KConfigXT-generated companions of exactly those three properties
+# (defaultFreeFloatingValue, isFreeFloatingImmutable, freeFloatingChanged, and
+# the equivalent pair for historyBehavior/retainPriorSearch) and no others -
+# confirming the kcfg file is the complete, real surface, not a guess.
+#
+# ---- Centred FLOATING panel [General] FreeFloating ----
+# freeFloating/FreeFloating is the real, verified lever - and it turned out to
+# matter: KRunner's out-of-the-box default (no krunnerrc file at all, a
+# genuinely fresh account) is FreeFloating=false, which docks the popup flush
+# against the underside of the top panel - horizontally centred, but not
+# floating. This was confirmed live: `qdbus6 org.kde.krunner /App
+# org.kde.krunner.App.display` (the real D-Bus method, read from
+# /usr/share/dbus-1/interfaces/org.kde.krunner.App.xml - see also
+# harness/states.toml's search-open state, which opens the same window through
+# the Alt+Space shortcut instead) on a fresh boot with no krunnerrc produced a
+# popup touching the panel's bottom edge, screenshotted via
+# harness/spike/boot_capture.sh. Writing FreeFloating=true with `kwriteconfig6
+# --file krunnerrc --group General --key FreeFloating true` BEFORE that same
+# trigger visibly detached the popup from the panel: same horizontal centring,
+# now also vertically centred with a real gap above it - a genuine floating
+# panel, not merely a cosmetic difference. FreeFloating=true is therefore set
+# below as the correct, verified-real key for this requirement.
+#
+# ---- "Material driven by tokens" - NO REAL LEVER EXISTS, not implemented ----
+# Checked independently rather than assuming the KWin decoration/Overview
+# effect precedent (this file's sibling, kwinrc) carries over unchanged - it
+# does not automatically, KRunner uses Plasma's frame/theme system, not
+# KDecoration3 or a kwin effect config group - but the conclusion turns out to
+# be the same class of finding:
+#   - The kcfg schema above is exhaustive: no opacity, blur, radius or
+#     "material"-shaped key exists in krunnersettingsbase.kcfg, and the KCM
+#     binary's own strings confirm nothing beyond the three keys above is even
+#     wired up to a settings UI.
+#   - `strings -a /usr/bin/krunner` and `strings -a /usr/lib/libKF6Runner.so`,
+#     grepped case-insensitively for opacity|blur|radius|corner|material|
+#     background, found nothing meaningful (the krunner binary's only match was
+#     an unrelated CLI help string, "Start KRunner in the background, don't
+#     show it."; libKF6Runner.so had no matches at all) - KRunner's own code
+#     does not parametrise any of this.
+#   - The popup's frame is Plasma's generic, shared dialog background SVG
+#     (/usr/share/plasma/desktoptheme/default/{opaque,translucent,solid}/
+#     dialogs/background.svgz - the same asset every Plasma popup/tooltip/menu
+#     uses), not something KRunner itself owns or can be pointed at a
+#     per-component token from here.
+#   - Whether that frame blurs its background is decided by
+#     `Plasma::Theme::blurBehindEnabled()` (found by symbol name in
+#     libPlasma.so.6.7.5) - a RUNTIME QUERY against the compositor's active
+#     state, not a stored config value - and KWin's Blur effect is already
+#     `"EnabledByDefault": true` in its own metadata
+#     (/usr/share/kwin-wayland/builtin-effects/blur.json), so background blur
+#     for KRunner (and every other popup) already happens out of the box,
+#     globally, with nothing for this package to switch on. Its only tunable
+#     ("strength"/"noise"/"saturation", found via `strings -a` on
+#     kwin_blur_config.so) is a compositor-wide multiplier applied to every
+#     blurred surface at once - the same class of value as kwinrc's own
+#     AnimationDurationFactor finding for the Overview effect, and mapping
+#     design/tokens.json's material.blur_radius (a per-surface pixel radius)
+#     onto it would be exactly the kind of approximation that finding already
+#     rejected. It is not done here either.
+#   - Corner radius: no radius/corner key exists anywhere in the scanned
+#     binaries or the kcfg; the popup's corners are whatever shape is baked
+#     into the shared background.svgz asset itself - the same category of
+#     finding as the Breeze window decoration's boolean-only RoundedCorners
+#     lever (kwinrc, [Windeco]), except KRunner does not even have that much of
+#     a toggle.
+# Net result: design/tokens.json's material.bg_opacity.menu (0.7),
+# material.blur_radius (36) and radius.menu (10) have NO real, KRunner-specific
+# lever in this build (krunner 6.30.0-1 / plasma-workspace 6.7.5-1 / kwin
+# 6.7.5-1). Per this project's own escalation rule (do not approximate a
+# missing lever), this is reported rather than faked - see
+# docs/SHELL_CONTRACT.md for the same finding in the document that tracks V3's
+# scope.
+[General]
+FreeFloating=true

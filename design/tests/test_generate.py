@@ -12,8 +12,8 @@ from design.generate import generate, main
 class TestGenerate:
     """Tests for generate() function."""
 
-    def test_generate_writes_eight_files(self, tmp_path):
-        """generate() should write exactly 8 files: 4 generators × 2 modes."""
+    def test_generate_writes_eleven_files(self, tmp_path):
+        """generate() should write exactly 11 files: 4 generators x 2 modes, plus 3 mode-independent layout files."""
         from design.validate import load_tokens
 
         tokens_path = Path(__file__).parent.parent / "tokens.json"
@@ -23,11 +23,12 @@ class TestGenerate:
         with patch("design.generators.gtk_css.render", return_value="gtk output\n"), \
              patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
-             patch("design.generators.kvantum.render", return_value="kvantum output\n"):
+             patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n"):
             result = generate(tokens, tmp_path, "test_theme")
 
-        # Verify exactly 8 files were created
-        assert len(result) == 8, f"Expected 8 files, got {len(result)}: {result}"
+        # Verify exactly 11 files were created
+        assert len(result) == 11, f"Expected 11 files, got {len(result)}: {result}"
 
         # Verify all files exist
         for path in result:
@@ -37,7 +38,7 @@ class TestGenerate:
         assert result == sorted(result), "Return value must be sorted"
 
     def test_generate_creates_correct_directory_structure(self, tmp_path):
-        """generate() should create files in plasma/, kvantum/, gtk/, qml/ subdirectories."""
+        """generate() should create files in plasma/, kvantum/, gtk/, qml/, layout/ subdirectories."""
         from design.validate import load_tokens
 
         tokens_path = Path(__file__).parent.parent / "tokens.json"
@@ -46,16 +47,19 @@ class TestGenerate:
         with patch("design.generators.gtk_css.render", return_value="gtk output\n"), \
              patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
-             patch("design.generators.kvantum.render", return_value="kvantum output\n"):
+             patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n"):
             result = generate(tokens, tmp_path, "mytheme")
 
         # Verify directory structure
         dirs = set(p.parent.name for p in result)
-        assert dirs == {"plasma", "kvantum", "gtk", "qml"}, f"Expected 4 directories, got {dirs}"
+        assert dirs == {"plasma", "kvantum", "gtk", "qml", "layout"}, f"Expected 5 directories, got {dirs}"
 
-        # Verify filenames contain the theme name
+        # Verify filenames contain the theme name (except qml's and layout's own
+        # fixed, Plasma-dictated filenames, which do not vary by theme name)
         for path in result:
-            assert "mytheme" in path.name or path.parent.name == "qml", f"Expected theme name in {path.name}"
+            assert "mytheme" in path.name or path.parent.name in ("qml", "layout"), \
+                f"Expected theme name in {path.name}"
 
     def test_generate_invalid_name_raises_valueerror(self, tmp_path):
         """generate() should raise ValueError for invalid theme names."""
@@ -100,12 +104,13 @@ class TestGenerate:
             with patch("design.generators.gtk_css.render", return_value="gtk output\n"), \
                  patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
                  patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
-                 patch("design.generators.kvantum.render", return_value="kvantum output\n"):
+                 patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+                 patch("design.generators.plasma_layout.render", return_value="layout output\n"):
                 result = generate(tokens, tmp_path, valid_name)
-                assert len(result) == 8
+                assert len(result) == 11
 
-    def test_generate_calls_all_four_generators(self, tmp_path):
-        """generate() should call all four generator.render() functions."""
+    def test_generate_calls_all_five_generators(self, tmp_path):
+        """generate() should call all five generator.render() functions."""
         from design.validate import load_tokens
 
         tokens_path = Path(__file__).parent.parent / "tokens.json"
@@ -114,14 +119,17 @@ class TestGenerate:
         with patch("design.generators.gtk_css.render", return_value="gtk output\n") as mock_gtk, \
              patch("design.generators.qml_singleton.render", return_value="qml output\n") as mock_qml, \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n") as mock_plasma, \
-             patch("design.generators.kvantum.render", return_value="kvantum output\n") as mock_kvantum:
+             patch("design.generators.kvantum.render", return_value="kvantum output\n") as mock_kvantum, \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n") as mock_layout:
             generate(tokens, tmp_path, "test_theme")
 
-        # Verify each generator was called twice (light and dark)
+        # Verify each mode-dependent generator was called twice (light and dark)
         assert mock_gtk.call_count == 2, f"gtk_css.render called {mock_gtk.call_count} times, expected 2"
         assert mock_qml.call_count == 2, f"qml_singleton.render called {mock_qml.call_count} times, expected 2"
         assert mock_plasma.call_count == 2, f"plasma_colors.render called {mock_plasma.call_count} times, expected 2"
         assert mock_kvantum.call_count == 2, f"kvantum.render called {mock_kvantum.call_count} times, expected 2"
+        # plasma_layout has no light/dark variant, so it must be called exactly once.
+        assert mock_layout.call_count == 1, f"plasma_layout.render called {mock_layout.call_count} times, expected 1"
 
     def test_generate_returns_sorted_paths(self, tmp_path):
         """generate() should return sorted list of paths."""
@@ -133,7 +141,8 @@ class TestGenerate:
         with patch("design.generators.gtk_css.render", return_value="gtk output\n"), \
              patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
-             patch("design.generators.kvantum.render", return_value="kvantum output\n"):
+             patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n"):
             result = generate(tokens, tmp_path, "test_theme")
 
         # Verify sorted
@@ -152,6 +161,7 @@ class TestMain:
              patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
              patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
              patch("design.generate.PROJECT_ROOT", tmp_path):
             exit_code = main([
                 "--tokens", str(tokens_path),
@@ -219,6 +229,7 @@ class TestMain:
              patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
              patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
              patch("design.generate.PROJECT_ROOT", tmp_path):
             exit_code = main([
                 "--tokens", str(tokens_path),
@@ -230,7 +241,7 @@ class TestMain:
         assert out_dir.exists(), "Output directory should be created"
         # Verify files were written (only count files, not directories)
         files = [p for p in out_dir.rglob("*") if p.is_file()]
-        assert len(files) == 8, f"Expected 8 files, got {len(files)}: {files}"
+        assert len(files) == 11, f"Expected 11 files, got {len(files)}: {files}"
 
     def test_main_default_tokens_path(self, tmp_path):
         """main() should use default tokens.json if not specified."""
@@ -240,6 +251,7 @@ class TestMain:
              patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
              patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
              patch("design.generate.PROJECT_ROOT", tmp_path), \
              patch("design.validate.load_tokens") as mock_load:
             mock_load.return_value = {
@@ -285,6 +297,7 @@ class TestMain:
              patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
              patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
              patch("design.generate.PROJECT_ROOT", tmp_path):
             exit_code = main([
                 "--tokens", str(tokens_path),
@@ -305,6 +318,7 @@ class TestMain:
              patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
              patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
              patch("design.generate.PROJECT_ROOT", tmp_path), \
              patch.dict(os.environ, {"DISTRO_NAME": "my_distro"}):
             exit_code = main([
@@ -323,6 +337,7 @@ class TestMain:
              patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
              patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
              patch("design.generate.PROJECT_ROOT", tmp_path), \
              patch.dict(os.environ, {}, clear=False) as env:
             # Ensure DISTRO_NAME is not set
@@ -384,6 +399,7 @@ class TestMain:
              patch("design.generators.qml_singleton.render", return_value="qml output\n"), \
              patch("design.generators.plasma_colors.render", return_value="plasma output\n"), \
              patch("design.generators.kvantum.render", return_value="kvantum output\n"), \
+             patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
              patch("design.generate.PROJECT_ROOT", proj_root):
             exit_code = main([
                 "--tokens", str(tokens_path),
@@ -401,7 +417,7 @@ class TestEndToEnd:
     def test_generate_end_to_end_with_real_generators(self, tmp_path):
         """End-to-end test with real generators (skipped if any is not implemented)."""
         from design.validate import load_tokens
-        from design.generators import gtk_css, qml_singleton, plasma_colors, kvantum
+        from design.generators import gtk_css, qml_singleton, plasma_colors, kvantum, plasma_layout
 
         tokens_path = Path(__file__).parent.parent / "tokens.json"
         tokens = load_tokens(tokens_path)
@@ -412,14 +428,15 @@ class TestEndToEnd:
             qml_singleton.render(tokens, mode="light", name="Test")
             plasma_colors.render(tokens, mode="light", name="Test")
             kvantum.render(tokens, mode="light", name="Test")
+            plasma_layout.render(tokens)
         except NotImplementedError:
             pytest.skip("One or more generators are not yet implemented")
 
         # If all generators are implemented, run the end-to-end test
         result = generate(tokens, tmp_path, "e2e_theme")
 
-        # Verify 8 files were created
-        assert len(result) == 8
+        # Verify 11 files were created
+        assert len(result) == 11
         for path in result:
             assert path.exists(), f"File not created: {path}"
             # Verify file is not empty and ends with newline

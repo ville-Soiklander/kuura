@@ -1,0 +1,24 @@
+# Selects which installed Kvantum theme is active for new users (the light variant
+# by default, matching the light default docs/HARNESS_CONTRACT.md's `[modes.light]`
+# also lists first). Installed to /etc/skel/.config/Kvantum/kvantum.kvconfig by the
+# kuura-shell package's package() (docs/SHELL_CONTRACT.md), which replaces "@NAME@"
+# with $DISTRO_NAME first -- this file cannot be static data like kwinrc, the active
+# theme's name is only known at package-build time.
+#
+# WHY this exact format: `kvantummanager --set <ThemeName>` was run live in the guest
+# image and the file it wrote was inspected directly -- precisely this: a [General]
+# section with one key, theme=<ThemeName>, nothing else. <ThemeName> must equal the
+# name of that theme's own directory AND .kvconfig file under /usr/share/Kvantum/
+# (also this package's own naming -- see PKGBUILD's package()) -- Kvantum resolves
+# the active theme purely by that name string; there is no separate "light/dark"
+# flag or concept inside Kvantum itself, confirmed by scanning /usr/share/Kvantum on
+# the guest image (bundled themes ship as fully separate directory pairs, e.g.
+# KvArc/KvArcDark, never one directory with a light/dark toggle).
+#
+# This key ALONE has no visible effect without kdeglobals' [KDE] widgetStyle=kvantum
+# (shipped alongside this file, see skel/.config/kdeglobals) actually selecting
+# Kvantum as the active Qt style -- both were confirmed together live, screenshotting
+# a real app (Dolphin) before and after. See docs/SHELL_CONTRACT.md's "Dark mode"
+# section for the full trail.
+[General]
+theme=@NAME@-light

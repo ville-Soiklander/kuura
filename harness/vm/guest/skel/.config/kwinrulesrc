@@ -16,8 +16,8 @@
 # so dialogs and pop-ups of these applications keep their natural placement.
 
 [General]
-count=3
-rules=1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a01,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a02,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a03
+count=4
+rules=1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a01,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a02,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a03,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a04
 
 [1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a01]
 Description=Harness: file manager window geometry
@@ -49,5 +49,16 @@ size=1000,600
 sizerule=2
 types=1
 wmclass=firefox
+wmclasscomplete=false
+wmclassmatch=1
+
+[1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a04]
+Description=Harness: GTK text editor (app-menu-gtk state) window geometry
+position=140,50
+positionrule=2
+size=1000,600
+sizerule=2
+types=1
+wmclass=mousepad
 wmclasscomplete=false
 wmclassmatch=1

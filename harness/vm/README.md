@@ -113,10 +113,6 @@ switched off once to see the difference.
 
 | Setting | Where | Why |
 |---|---|---|
-| Solid wallpaper, colour `128,128,128` (`org.kde.color` plugin) | `skel/.config/plasma-org.kde.plasma.desktop-appletsrc` | A picture would pull the comparison towards the wallpaper. A neutral grey works in both colour modes. |
-| Complete desktop layout shipped instead of generated | same file, `plasmashellrc`, `kactivitymanagerdrc` | The wallpaper plugin can only be chosen in the layout. The layout is the generated default with these changes: wallpaper, fixed task manager launchers, fixed launcher favourites, no network applet. The activity id is fixed and must be equal in both files. `plasmashellrc` marks the layout migrations as done. |
-| Fixed task manager launchers and launcher favourites (System Settings, Dolphin, Konsole) | same file (`launchers=`, `favorites=`) | The default has a "preferred browser" entry, so the panel and the launcher would differ with and without the test-only browser. |
-| No network applet in the tray | same file (`extraItems`) | The guest has no network; the applet's state is noise. |
 | Animations off | `skel/.config/kdeglobals` (`AnimationDurationFactor=0`) | Frames are compared; a state must not be caught mid-animation. |
 | Text cursor does not blink | `kdeglobals` (`CursorBlinkRate=0`) | Control: with the value 1000 two consecutive screenshots of the search field alternate between two pictures. |
 | No screen locker | `kscreenlockerrc` | A locked screen is not the desktop. |
@@ -125,24 +121,51 @@ switched off once to see the difference.
 | No splash screen | `ksplashrc` | One less moving part at start-up. |
 | No wallet prompts | `kwalletrc` | A first-use dialog would appear over the desktop. |
 | Notification pop-ups stay until closed | `plasmanotifyrc` (`PopupTimeout=0`) | Control: without the key the pop-up is gone after about 5 seconds, with it it is still there after 17 seconds. The key is only read at start of the shell, so it works from the image, not when changed in a running session. |
-| Fixed window geometry (1000x600 at 140,50 logical px) for the file manager, System Settings and the browser | `skel/.config/kwinrulesrc`, `--width/--height` in `harness-browser` | Window size and place would otherwise be remembered from the previous run or chosen by the application. The values keep the window above the floating panel of the 1280x720 logical screen (the 1000x650 at 140,90 of the contract's example would end at y = 740, below the screen). The rules match the application ids the programs announce: `org.kde.dolphin`, `systemsettings`, `firefox`. |
+| Fixed window geometry (1000x600 at 140,50 logical px) for the file manager, System Settings, the browser and the GTK text editor | `skel/.config/kwinrulesrc`, `--width/--height` in `harness-browser` | Window size and place would otherwise be remembered from the previous run or chosen by the application. The values keep the window above the floating panel of the 1280x720 logical screen (the 1000x650 at 140,90 of the contract's example would end at y = 740, below the screen). The rules match the application ids the programs announce: `org.kde.dolphin`, `systemsettings`, `firefox`, `mousepad`. |
 | Output scale 2 on the virtual 2560x1440 monitor | `skel/.config/kwinoutputconfig.json` | See the spike; matched by the monitor's EDID hash, hence valid for this resolution only. |
 | Software rendering variables | `skel/.config/plasma-workspace/env/10-vm-rendering.sh` | No GPU; explicit instead of probing. |
 | English locale (`en_US.UTF-8`), UTC, US keyboard | `Containerfile`, `plasma-localerc`, `kxkbrc` | Dates, number formats and key mapping must not depend on anything. |
 | Fixed host name (`<distro>-vm`), machine id, file system uuid | `build_rootfs.sh` | Name-derived state is identical between builds. |
 | Fixed sample folder tree, fixed modification times, empty Desktop | `make-sample-tree.sh`, `skel/.config/user-dirs.dirs`, `overlay/etc/xdg/user-dirs.conf` | The file manager shows real content that never changes; the desktop shows the Desktop folder, so it stays empty. The tool that would create folders at login is switched off. |
 | Fixed places panel, disk section hidden | `templates/user-places.xbel` | The disk entry shows a usage bar that follows the size of the image. |
-| Kickoff (application launcher) popup height raised from the shell default of 400 to 900 | `skel/.config/plasma-org.kde.plasma.desktop-appletsrc`, `[Containments][2][Applets][3][Configuration]` | Control: the popup's actual height is `max(popupHeight, content implicit height)`, and the content's own implicit height varies by a few logical pixels from boot to boot (identical image, identical steps), which used to shift the bottom tab/power-button bar and fail two-boot determinism (`menubar-open`, ~17,000 differing pixels). Confirmed narrow: unaffected by restarting `plasmashell` or reopening the popup within one boot, and unaffected by waiting longer before the first open - only a fresh boot reproduces the variance, so it is decided once, early, per boot. A smaller margin (450) removed the flip when `menubar-open` was captured alone but still failed intermittently in the full 9-state sequence (the variance is bigger, or hit more often, once `desktop-empty`'s own reset/settle cycle has run first). 900 exceeds the space available above the panel, so the popup is clamped to the largest size that fits the screen - governed by fixed screen geometry instead of the variable content height - which held over repeated fresh boots in both the isolated and full-sequence cases. Trade-off accepted deliberately: the popup shows more empty space below the favourites grid than the 400 default did. |
 | Browser profile made fresh on every start; first-run, update, telemetry, restore and notification prompts off; caret and animations off; software rendering | `overlay/usr/local/share/harness/firefox-profile/user.js`, `overlay/usr/lib/firefox/distribution/policies.json`, `harness-browser` | A first launch is the only launch that is always the same. |
+| GTK global menu export for the `app-menu-gtk` state | `skel/.config/plasma-workspace/env/20-gtk-appmenu.sh` (`GTK_MODULES=appmenu-gtk-module`), `appmenu-gtk-module` package (`Containerfile`) | Needed for a classic GtkMenuBar app (Mousepad) to hand its menu to KDE's global-menu registrar at all - confirmed live: without it, Mousepad keeps its own in-window menu bar and no window ever registers with `com.canonical.AppMenu.Registrar`. |
 
 The clock in the panel is not made deterministic (the VM clock starts at a fixed date, but
 it advances): the comparison masks it (`docs/HARNESS_CONTRACT.md`). Two clean boots differ
 only there.
 
-## Regenerating the desktop layout
+## The desktop layout is no longer this directory's own file (V3)
 
-`plasma-org.kde.plasma.desktop-appletsrc` and `plasmashellrc` are copies of what the shell
-generates on the first login, edited as described above. After changing `ARCH_ARCHIVE_DATE`
-(a new Plasma version) check that they are still valid: boot the image, take a screenshot,
-and compare the shipped layout with the one the new shell generates for a user without one
-(`~/.config/plasma-org.kde.plasma.desktop-appletsrc` after a login with an empty `~/.config`).
+Until V3 (`docs/SHELL_CONTRACT.md`), `guest/skel/.config/` shipped its OWN fixed
+`plasma-org.kde.plasma.desktop-appletsrc`, `plasmashellrc` and `kactivitymanagerdrc` for a
+single stock bottom panel, edited by hand for determinism (solid grey wallpaper, fixed task
+manager launchers and launcher favourites, no network applet in the tray, and a Kickoff
+popup-height override - see the git history of this file for the exact old table rows if
+any of this needs re-diagnosing). Those three files were REMOVED from `guest/skel/`: the
+real panel layout now comes from `packages/kuura-shell` (`design/generators/plasma_layout.py`
+generates all three; the package installs them to `/etc/skel/...`), and the Containerfile
+copies `guest/skel/` onto `/etc/skel/` AFTER the metapackage is installed - so as long as
+`guest/skel/` also ships its own copies of these three files, they always win and the real
+panel never reaches a booted image (this was the actual root cause the first time this was
+tried; confirmed live before removing them here).
+
+**Open risk, not silently dropped:** removing those files also removed the determinism
+tuning they carried, which was NOT re-verified with `make shots-determinism` in the change
+that made the panel real (out of that change's scope; flagged here for whoever picks it up
+next):
+- The Kickoff popup-height fix (see the old table row this section replaces, still in the
+  git history) is gone. If `menubar-open` starts failing two-boot determinism again
+  (large, `~17,000`-pixel-class diffs, not the small mask-sized ones), this is the first
+  thing to re-check - and the fix, if still needed, belongs in `guest/skel/` again (a
+  small `kwriteconfig6`-style patch onto the package-installed appletsrc, for example),
+  NOT back in `packages/kuura-shell`'s own shipped file, which must stay a clean,
+  real-product default.
+- The real panel's system tray now includes the network applet (the old stock layout
+  explicitly excluded it, "the guest has no network; the applet's state is noise"). Watch
+  for flicker/non-determinism from it specifically if `desktop-empty` or `menubar-open`
+  (whose systray view can be part of the settle image) ever shows intermittent diffs.
+
+Re-verify with `make shots-determinism` before trusting new goldens as noise-free, and see
+`docs/SHELL_CONTRACT.md`'s "Panel layout generator" section for how the three files are now
+generated and installed.

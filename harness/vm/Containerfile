@@ -93,9 +93,30 @@ RUN retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -lt 4 ] || return 1; echo
 #   dolphin          file manager (also in the metapackage; listed so that the test image
 #   systemsettings   keeps working if the metapackage ever drops one of them; KRunner is
 #                    part of plasma-workspace and needs no extra package)
+#   mousepad         GTK3 text editor for the `app-menu-gtk` state (global-menu DoD,
+#                    docs/SHELL_CONTRACT.md's "Verification" section, point 1): Firefox
+#                    was verified live NOT to publish a menu over the global-menu
+#                    protocol (no com.canonical.AppMenu.Registrar activity, and its
+#                    profile does not even show a traditional menu bar - see the
+#                    implementing agent's report), so this project's own documented
+#                    fallback applies - a small, explicitly test-only GTK application,
+#                    following harness-browser's precedent. Mousepad keeps a real,
+#                    always-visible classic GtkApplication menu bar (File/Edit/Search/
+#                    View/Document/Help) unlike most GNOME-style GTK4 apps, which is
+#                    exactly what GMenuModel/org.gtk.Menus export needs something to
+#                    export in the first place.
+#   appmenu-gtk-module  the GTK module that actually exports a classic GtkMenuBar
+#                    (Mousepad's kind of menu) to KDE's global-menu registrar -
+#                    confirmed live to be REQUIRED, not optional: without it, kappmenu
+#                    still activates com.canonical.AppMenu.Registrar's D-Bus name (it
+#                    is always-activatable) but no window ever registers a menu with
+#                    it, so the panel's Global Menu widget stays empty even though
+#                    `busctl` output alone can look like something worked. Loaded via
+#                    GTK_MODULES=appmenu-gtk-module, see
+#                    guest/skel/.config/plasma-workspace/env/20-gtk-appmenu.sh.
 # --needed: packages that are already installed as dependencies are left alone.
 RUN retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -lt 4 ] || return 1; echo "retry $n of 3: $*" >&2; sleep 10; done; } \
-    && retry pacman -S --noconfirm --needed --disable-download-timeout libnotify firefox dolphin systemsettings \
+    && retry pacman -S --noconfirm --needed --disable-download-timeout libnotify firefox dolphin systemsettings mousepad appmenu-gtk-module \
     && rm -rf /var/cache/pacman/pkg/*
 
 # The signed repository (packages, signed database, public key) is copied in, not
@@ -122,8 +143,9 @@ RUN chmod -R a+rX /srv/repo \
     && sed -i "/^\[${DISTRO_NAME}\]\$/,\$d" /etc/pacman.conf
 
 # Fail the build early, with a clear message, if a program a state needs is missing:
-# notify-send, the browser, the file manager, System Settings and the KRunner UI.
-RUN for tool in notify-send firefox dolphin systemsettings krunner plasma-apply-colorscheme; do \
+# notify-send, the browser, the file manager, System Settings, the KRunner UI and the
+# GTK text editor of the global-menu DoD's app-menu-gtk state.
+RUN for tool in notify-send firefox dolphin systemsettings krunner plasma-apply-colorscheme mousepad; do \
         test -x "/usr/bin/${tool}" || { echo "missing in the image: ${tool}" >&2; exit 1; }; \
     done
 

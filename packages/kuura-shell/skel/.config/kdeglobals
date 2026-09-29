@@ -1,0 +1,27 @@
+# Selects Kvantum as the active Qt widget style for new users. Installed to
+# /etc/skel/.config/kdeglobals by the kuura-shell package (docs/SHELL_CONTRACT.md).
+#
+# WHY this key and no others here: confirmed live (freshly booted guest image, KWin
+# 6.7.5-1 / kvantum 1.1.8-1, `kreadconfig6 --file kdeglobals --group KDE --key
+# widgetStyle`) that a stock account's kdeglobals has NO widgetStyle key at all, and
+# Qt6/KDE falls back to widgetStyle=Breeze -- Kvantum is installed (it is a kvantum
+# dependency of this package, see PKGBUILD) but never actually applied without this
+# key. Verified the effect directly, not assumed: `kwriteconfig6 --file kdeglobals
+# --group KDE --key widgetStyle kvantum` followed by a FRESH `dolphin` launch (no
+# logout/login needed) visibly switched to the active Kvantum theme's own widget look
+# (flat, dark, no Breeze chrome) -- screenshot evidence in the V3 investigation notes
+# handed back with this change.
+#
+# Which Kvantum theme is active (light/dark, this project's own generated theme) is a
+# SEPARATE setting, Kvantum's own ~/.config/Kvantum/kvantum.kvconfig (also shipped by
+# this package, see kvantum.kvconfig.in) -- this key only makes Kvantum THE style at
+# all; it says nothing about which one.
+#
+# Colour scheme selection (kdeglobals' own [General] ColorScheme= key) is
+# intentionally NOT set here -- docs/SHELL_CONTRACT.md lists "colour scheme
+# selection" as its own, separate skel item, outside the scope of this change
+# (Kvantum/GTK4 dark-mode theming). A later change adding it can add a [General]
+# section to this same file; ini files merge cleanly by section, so this is not a
+# conflict, just a heads-up for whoever writes that section.
+[KDE]
+widgetStyle=kvantum

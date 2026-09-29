@@ -43,9 +43,13 @@ RUN useradd --create-home --shell /bin/bash builder \
 # Copy sources into the image instead of bind-mounting them: ownership and
 # permissions of mounts from a Windows drive are unreliable. The COPY steps come
 # last so that editing a package or script does not invalidate the (slow)
-# pacman layers above.
+# pacman layers above. design/ is staged next to packages/ because
+# packages/kuura-shell's build() runs `python3 -m design.generate` against this
+# repository's own design/ tree (docs/SHELL_CONTRACT.md) -- it needs to be a
+# sibling of packages/ inside the container the same way it is in the repository.
 WORKDIR /home/builder
 COPY --chown=builder:builder packages/ packages/
+COPY --chown=builder:builder design/ design/
 COPY --chown=builder:builder --chmod=0755 build/ build/
 
 USER builder

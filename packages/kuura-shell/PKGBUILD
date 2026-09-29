@@ -1,0 +1,147 @@
+# Desktop shell theming: panel layout, KWin tuning, keyboard shortcuts and the
+# Kvantum/GTK4 theming that turn a plain Plasma session into the project's own look
+# (docs/SHELL_CONTRACT.md, Vaihe 3 of the working brief). Ships no upstream source;
+# like kuura-desktop it is built from this monorepo. build() generates every theme
+# file from this repository's own design/tokens.json AT PACKAGE-BUILD TIME (never at
+# first login), so the result is reproducible from the pinned archive snapshot like
+# everything else the project ships.
+#
+# The package name comes from the environment (DISTRO_NAME, see .env.example), the
+# same convention as kuura-desktop; building by hand without it fails with a clear
+# error. makepkg is run through build/build_repo.sh, which exports the variable.
+
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-shell"
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Desktop shell theming: panel layout, KWin tuning, shortcuts, Kvantum and GTK4 theme"
+arch=('any')
+url='https://github.com/ville-Soiklander/kuura'
+# Themes, configuration and scripts of the project are GPL-3.0-or-later (see LICENSE
+# and docs/LICENSES/README.md).
+license=('GPL-3.0-or-later')
+# kvantum: the theme engine this package configures (docs/SHELL_CONTRACT.md's own
+# "Dark mode" section below explains why widgetStyle=kvantum plus a per-theme
+# directory is needed for any of this package's Kvantum files to have an effect).
+depends=('kvantum')
+# python: build() runs design/generate.py through its `python -m` CLI. Standard
+# library only (see that module's own docstring), so no further makedepends.
+makedepends=('python')
+
+# build(): generate every light/dark theme file (colour scheme, Kvantum, GTK4, QML
+# tokens) plus the two mode-independent panel layout files (appletsrc, plasmashellrc)
+# from design/tokens.json with the LOCKED design/generate.py
+# CLI. Nothing here parses tokens.json itself -- that stays entirely inside the
+# generators, which this package must not reimplement or second-guess. Also copies
+# this PKGBUILD's own skel/ directory into the build tree: namcap's PKGBUILD checks
+# flag any reference to the PKGBUILD's own directory as an error, wherever it occurs
+# in the file, comments included, not only inside package() -- confirmed empirically
+# (the error count matched the literal occurrence count of that variable name
+# exactly) -- so that variable name is never written anywhere in this file, not even
+# to explain why, and every path below is phrased relative to the build tree instead.
+build() {
+    # design/generate.py's own PROJECT_ROOT is derived from its own file location:
+    # two directories up from this PKGBUILD (packages/kuura-shell/PKGBUILD), inside
+    # the build container once design/ is staged there next to packages/ (see
+    # build/Containerfile). --out-dir must resolve inside that tree -- design/
+    # generate.py enforces this itself as a path-traversal guard -- so it is pointed
+    # at the build tree's own source directory, already inside it (one level below
+    # this PKGBUILD, which itself is two levels below the staged project root).
+    ( cd "$srcdir/../../.." && python3 -m design.generate \
+        --out-dir "$srcdir/generated" --name "$DISTRO_NAME" )
+
+    cp -r "$srcdir/../skel" "$srcdir/skel"
+}
+
+# package(): installs the generated theme files to the shared system locations
+# docs/SHELL_CONTRACT.md names, plus the default configuration new users get from
+# /etc/skel. The Kvantum and GTK4 install layouts below were the two things
+# docs/SHELL_CONTRACT.md left OPEN pending live verification in the screenshot
+# harness's guest image -- see that document's "Dark mode: Kvantum and GTK4/
+# libadwaita" section for the exact commands run and what they showed; the shape
+# below (two Kvantum theme directories, one shared GTK4 theme directory) follows
+# directly from that evidence, it is not assumed.
+package() {
+    local generated="$srcdir/generated"
+    local skel="$srcdir/skel"
+
+    # ---- Plasma colour schemes: one file per mode, installed as-is. ----
+    install -Dm644 "$generated/plasma/${DISTRO_NAME}-light.colors" \
+        "$pkgdir/usr/share/color-schemes/${DISTRO_NAME}-light.colors"
+    install -Dm644 "$generated/plasma/${DISTRO_NAME}-dark.colors" \
+        "$pkgdir/usr/share/color-schemes/${DISTRO_NAME}-dark.colors"
+
+    # ---- Kvantum: two separate theme directories, one per mode. ----
+    # Kvantum has no built-in light/dark concept inside a single theme (confirmed
+    # live: /usr/share/Kvantum on the guest image ships pairs like KvArc/KvArcDark as
+    # entirely separate directories, never one directory with two variants) -- so
+    # light and dark are two independent theme directories here too, each named
+    # "<name>-<mode>" and containing a SAME-named .kvconfig. That naming is Kvantum's
+    # own convention, not a choice made here: `kvantummanager --set KvArcDark`, run
+    # live, wrote theme=KvArcDark to the global config, and Kvantum then visibly
+    # loaded /usr/share/Kvantum/KvArcDark/KvArcDark.kvconfig for a real app (Dolphin,
+    # screenshotted) -- directory name, file name and the value written to
+    # kvantum.kvconfig's [General] theme= key are all identical strings.
+    install -Dm644 "$generated/kvantum/${DISTRO_NAME}-light.kvconfig" \
+        "$pkgdir/usr/share/Kvantum/${DISTRO_NAME}-light/${DISTRO_NAME}-light.kvconfig"
+    install -Dm644 "$generated/kvantum/${DISTRO_NAME}-dark.kvconfig" \
+        "$pkgdir/usr/share/Kvantum/${DISTRO_NAME}-dark/${DISTRO_NAME}-dark.kvconfig"
+
+    # ---- GTK4: ONE theme directory, using GTK's own gtk.css/gtk-dark.css pair. ----
+    # Unlike Kvantum, GTK (3 and 4 alike) has a single, long-standing, documented
+    # convention for one theme directory to carry both variants: gtk-4.0/gtk.css is
+    # the normal stylesheet, gtk-4.0/gtk-dark.css is loaded INSTEAD of it when
+    # GtkSettings:gtk-application-prefer-dark-theme is true. This is why
+    # docs/SHELL_CONTRACT.md already named a single /usr/share/themes/<name>/gtk-4.0/
+    # path rather than two -- the light/dark generated CSS map onto that pair
+    # directly. See docs/SHELL_CONTRACT.md's "Dark mode" section for the important
+    # caveat: this specific convention could NOT be shown visibly working end-to-end
+    # on the one real app available in the guest image (report this, do not assume
+    # it is proven just because it is standard).
+    install -Dm644 "$generated/gtk/${DISTRO_NAME}-light.css" \
+        "$pkgdir/usr/share/themes/${DISTRO_NAME}/gtk-4.0/gtk.css"
+    install -Dm644 "$generated/gtk/${DISTRO_NAME}-dark.css" \
+        "$pkgdir/usr/share/themes/${DISTRO_NAME}/gtk-4.0/gtk-dark.css"
+
+    # ---- Panel layout: the three generated files together, all to /etc/skel. ----
+    # These install lines were MISSING before this revision -- the whole reason the V3
+    # panel layout never reached a booted session (docs/SHELL_CONTRACT.md's "Panel
+    # layout generator" section, "Revised 2026-09-29"). THREE files, not one: live
+    # testing found panel THICKNESS and floating/fit-to-content behaviour are stored
+    # in plasmashellrc's [PlasmaViews] sections, not in appletsrc, and booting the
+    # actually-packaged image (not just applying the panel script by hand) surfaced a
+    # further gap -- the desktop containment's activityId needs a matching
+    # kactivitymanagerdrc or it refers to an activity nothing else knows about -- see
+    # design/generators/plasma_layout.py's own module docstring ("SECOND FILE
+    # DISCOVERED" / "THIRD FILE"). All three are already-complete generated files (no
+    # sed templating needed, unlike the Kvantum/GTK4 skel templates below).
+    install -Dm644 "$generated/layout/plasma-org.kde.plasma.desktop-appletsrc" \
+        "$pkgdir/etc/skel/.config/plasma-org.kde.plasma.desktop-appletsrc"
+    install -Dm644 "$generated/layout/plasmashellrc" \
+        "$pkgdir/etc/skel/.config/plasmashellrc"
+    install -Dm644 "$generated/layout/kactivitymanagerdrc" \
+        "$pkgdir/etc/skel/.config/kactivitymanagerdrc"
+
+    # ---- skel: default configuration for new users, installed verbatim. ----
+    install -Dm644 "$skel/.config/kwinrc" "$pkgdir/etc/skel/.config/kwinrc"
+    install -Dm644 "$skel/.config/kglobalshortcutsrc" \
+        "$pkgdir/etc/skel/.config/kglobalshortcutsrc"
+    install -Dm644 "$skel/.config/kdeglobals" "$pkgdir/etc/skel/.config/kdeglobals"
+    # krunnerrc: KRunner's own real config key for a centred FLOATING (not
+    # docked-to-panel) popup -- see that file's own header comment for the exact
+    # live investigation (docs/SHELL_CONTRACT.md scope item 4) that found this key
+    # and found no real "material" (opacity/blur/radius) lever to go with it.
+    install -Dm644 "$skel/.config/krunnerrc" "$pkgdir/etc/skel/.config/krunnerrc"
+
+    # ---- skel templates: these two name the active theme, so (unlike the plain
+    # skel files above) they cannot be static data -- $DISTRO_NAME is only known at
+    # build time. Same idea as harness/vm/guest/templates/user-places.xbel.in's
+    # @HOME@ substitution (see harness/vm/Containerfile): a plain sed replaces the
+    # placeholder, nothing more.
+    local tmp
+    tmp="$(mktemp)"
+    sed "s/@NAME@/${DISTRO_NAME}/g" "$skel/.config/Kvantum/kvantum.kvconfig.in" > "$tmp"
+    install -Dm644 "$tmp" "$pkgdir/etc/skel/.config/Kvantum/kvantum.kvconfig"
+    sed "s/@NAME@/${DISTRO_NAME}/g" "$skel/.config/gtk-4.0/settings.ini.in" > "$tmp"
+    install -Dm644 "$tmp" "$pkgdir/etc/skel/.config/gtk-4.0/settings.ini"
+    rm -f "$tmp"
+}

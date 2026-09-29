@@ -1,0 +1,73 @@
+# Keyboard shortcuts for new users of the desktop shell (V3 of the working brief).
+# Installed to /etc/skel/.config/kglobalshortcutsrc by the kuura-shell package
+# (docs/SHELL_CONTRACT.md). Bound to the STOCK components that stand in for the
+# future bespoke Beacon/Shelf/Overview surfaces, matching the screenshot harness's
+# states (docs/HARNESS_CONTRACT.md, harness/states.toml): search -> the stock
+# KRunner; window overview -> the stock Overview effect; close/hide window and
+# switch workspace -> KWin's own existing shortcut components.
+#
+# Component and action names below are copied VERBATIM from the guest image's own
+# live default (`cat ~/.config/kglobalshortcutsrc` in a freshly booted, never
+# customised session, KWin 6.7.5-1 / kglobalaccel 6.30.0-1) - not invented. KDE's
+# global-shortcut daemon (kglobalaccel; it runs as a module of kded6 in this build,
+# there is no standalone kglobalacceld process) merges these values in at its own
+# start-up, overriding each owning component's compiled-in default for the actions
+# named here; every other action a component registers keeps its own default.
+#
+# ---- Left out on purpose: KRunner's own search shortcut, the Overview shortcut ----
+# Both already have a correct, verified-firing default with no file needed at all:
+# KRunner's own default is Alt+Space / Alt+F2 (read from its shipped
+# /usr/share/kglobalaccel/org.kde.krunner.desktop: X-KDE-Shortcuts=Alt+Space,Alt+F2);
+# the Overview effect's own default is Meta+W (read from the [kwin] group of the
+# live dump: "Overview=Meta+W,Meta+W,Toggle Overview"). Both are already relied on by
+# harness/states.toml's "search-open" and "overview" states today, unmodified, so
+# they demonstrably fire already. KRunner's own kglobalshortcutsrc GROUP name could
+# NOT be confirmed live in the time available (it never materialises in the file
+# until a user actually customises it away from the default, and introspecting
+# org.kde.kglobalaccel's D-Bus tree only confirmed the D-BUS OBJECT PATH segment
+# "org_kde_krunner_desktop", which is not necessarily the exact ini group spelling).
+# Rather than guess a plausible-sounding group name for a shortcut that already
+# works, it is left alone; do not add a [krunner]/[org.kde.krunner...] override here
+# without confirming the real group name live first.
+#
+# ---- [kwin] component: close, minimize, switch desktop ----
+# Window Close / Window Minimize: this is ALREADY the compiled default (Alt+F4 /
+# Meta+PgDown, confirmed in the same live dump) - pinned explicitly here only so a
+# future KDE point release cannot silently change it from under this project, the
+# same reasoning harness/vm/guest/skel ships a complete layout instead of a
+# generated one.
+# Switch to Next Desktop / Switch to Previous Desktop: these two actions exist in
+# the live dump but ship completely UNBOUND by default ("...=none,none,..."). Chose
+# Ctrl+Alt+Right/Left: confirmed by inspecting the full live default dump that no
+# other default shortcut anywhere uses this chord (Meta+Ctrl+Left/Right, a different
+# chord, is already used by "Switch One Desktop to the Left/Right", the grid-relative
+# variant of desktop switching - left untouched), and it matches the chord users
+# coming from other desktops already expect for workspace switching.
+#
+# ---- Verification note (read before assuming this needs redoing) ----
+# kglobalaccel seeds its live shortcut-to-action map once, when each owning
+# component (kwin, for every action below) first registers its actions at its own
+# start-up. Proven live: editing this file in an ALREADY-RUNNING session, then
+# toggling org.kde.KGlobalAccel.blockGlobalShortcuts, then even killing and
+# relaunching kded6 (the process that hosts kglobalaccel) did NOT change the live
+# Ctrl+Alt+Right/Left binding - because kwin itself, the component that actually owns
+# these actions, was never restarted, and a config-file edit alone does not push a
+# new binding into an already-registered live QAction. The correct live-apply path
+# is kglobalaccel's own org.kde.KGlobalAccel.setShortcut D-Bus method (confirmed to
+# exist via introspection: `qdbus6 org.kde.kglobalaccel /kglobalaccel`), which is
+# what the Shortcuts KCM itself calls instead of editing this file directly.
+# For the real deployment case this skel file is for - a genuinely fresh user
+# session - kwin, plasmashell and kglobalaccel all start cold together and read this
+# file once at start-up, so every binding below applies from first login with no
+# reload needed. Window Close/Minimize were confirmed against the live compiled
+# default (so they are known-good). The two desktop-switch bindings were confirmed
+# to be real, currently-unbound, collision-free kwin actions and written in the
+# file format every other line in the live dump uses, but could NOT be hot-verified
+# firing inside an already-running test session for the reason above - re-check them
+# on a genuinely fresh boot (or via the Shortcuts KCM's own apply path) before
+# relying on this as fully proven.
+[kwin]
+Window Close=Alt+F4,Alt+F4,Close Window
+Window Minimize=Meta+PgDown,Meta+PgDown,Minimize Window
+Switch to Next Desktop=Ctrl+Alt+Right,Ctrl+Alt+Right,Switch to Next Desktop
+Switch to Previous Desktop=Ctrl+Alt+Left,Ctrl+Alt+Left,Switch to Previous Desktop

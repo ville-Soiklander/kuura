@@ -23,3 +23,9 @@ scripts/
 
 # Build outputs: container build cache, signed package repository, development signing keys
 .build/
+
+# C++ package build directories (packages/*/build/, e.g. packages/kuura-frost/)
+packages/*/build/
+
+# Editor-local settings (e.g. CMake Tools writes an absolute local path here)
+.vscode/

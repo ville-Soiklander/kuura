@@ -120,21 +120,35 @@ acquire_lock() {
 }
 
 # read_metapackage_deps
-# Sets DESKTOP_DEPS to the dependency names of the metapackage, in PKGBUILD order.
-# WHY: the Containerfile installs the dependencies in an early, cached layer and the
-# metapackage itself late (the repository is signed anew on every `make repo`). The list
-# is read from the PKGBUILD, the single place that defines the desktop, so nothing is
-# duplicated. The PKGBUILD is sourced in a subshell, like makepkg does; it is a file of
-# this repository. Version constraints (foo>=1) are stripped; the pinned snapshot decides
+# Sets DESKTOP_DEPS to the UPSTREAM dependency names of the metapackage (Arch's own
+# mirrors), in PKGBUILD order, EXCLUDING every dependency that is itself another
+# package built by this monorepo (packages/*/PKGBUILD - for example "<name>-shell",
+# added to kuura-desktop's `depends` by docs/SHELL_CONTRACT.md: "installed by
+# kuura-desktop (added to its depends)"). WHY exclude those: the Containerfile installs
+# DESKTOP_DEPS in an early, cached layer that runs BEFORE the local signed repository is
+# even added to pacman.conf (that happens in a later layer, right before the
+# metapackage itself is installed - see the Containerfile's own layer-order comment). A
+# locally built dependency does not exist anywhere pacman can see it yet at that point
+# - confirmed live: `pacman -S ... kuura-shell` in that early layer fails with "error:
+# target not found: kuura-shell" even though the package is already sitting in
+# $REPO_DIR, because pacman.conf does not know about that repo yet. It needs no special
+# handling here beyond leaving it out: by the time `pacman -S "$DISTRO_NAME-desktop"`
+# runs (later layer, repo already configured), pacman resolves and installs it
+# automatically as an unmet dependency, exactly like every other dependency of the
+# metapackage. Version constraints (foo>=1) are stripped; the pinned snapshot decides
 # versions.
 read_metapackage_deps() {
     local pkgbuild="" candidate name
+    # First pass: the pkgname of every PKGBUILD this monorepo itself builds, so the
+    # second pass below can recognise and skip them regardless of `depends` order.
+    local local_pkgs=""
     for candidate in "$PROJECT_DIR"/packages/*/PKGBUILD; do
         [ -f "$candidate" ] || continue
         name="$( (set +u; . "$candidate" >/dev/null 2>&1; printf '%s' "${pkgname:-}") || true)"
+        [ -n "$name" ] || continue
+        local_pkgs="$local_pkgs $name"
         if [ "$name" = "$DISTRO_NAME-desktop" ]; then
             pkgbuild="$candidate"
-            break
         fi
     done
     [ -n "$pkgbuild" ] || die "no PKGBUILD for '$DISTRO_NAME-desktop' found under packages/"
@@ -143,6 +157,9 @@ read_metapackage_deps() {
     while IFS= read -r dep; do
         dep="${dep%%[<>=]*}"
         [[ "$dep" =~ ^[a-z0-9@][a-z0-9@._+-]*$ ]] || die "unsupported dependency name in PKGBUILD: '$dep'"
+        case " $local_pkgs " in
+            *" $dep "*) continue ;; # locally built: left for the metapackage-install step
+        esac
         list="$list $dep"
     done < <( (set +u; . "$pkgbuild" >/dev/null 2>&1; printf '%s\n' "${depends[@]}") )
     DESKTOP_DEPS="${list# }"

@@ -35,7 +35,7 @@ class TestColorTokenPropagation:
         # Generate files with original tokens
         out_dir_original = tmp_path / "original"
         result_original = generate(tokens, out_dir_original, "dod_test")
-        assert len(result_original) == 8
+        assert len(result_original) == 11
 
         # Mutate color.light.accent in a deep copy
         tokens_modified = copy.deepcopy(tokens)
@@ -44,7 +44,7 @@ class TestColorTokenPropagation:
         # Generate files with modified tokens
         out_dir_modified = tmp_path / "modified"
         result_modified = generate(tokens_modified, out_dir_modified, "dod_test")
-        assert len(result_modified) == 8
+        assert len(result_modified) == 11
 
         # Group files by mode and generator
         def group_files(results):

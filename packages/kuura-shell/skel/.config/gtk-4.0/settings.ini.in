@@ -1,0 +1,37 @@
+# Default GTK3/GTK4 theme selection for new users (the light variant, matching the
+# light default used by the sibling Kvantum and colour-scheme skel files). Installed
+# to /etc/skel/.config/gtk-4.0/settings.ini by the kuura-shell package's package()
+# (docs/SHELL_CONTRACT.md), which replaces "@NAME@" with $DISTRO_NAME first -- this
+# file cannot be static data like kwinrc, the active theme's name is only known at
+# package-build time.
+#
+# gtk-theme-name selects this project's own theme, which ships ONE directory holding
+# both variants (/usr/share/themes/<name>/gtk-4.0/{gtk.css,gtk-dark.css} -- GTK's own
+# long-standing convention, see PKGBUILD's package() comment for the install layout).
+# gtk-application-prefer-dark-theme is GTK's documented switch between the two;
+# false here matches the light default.
+#
+# CAVEAT -- read before assuming this is proven end-to-end, report this rather than
+# silently trusting it: these keys are the standard, documented GTK mechanism, not an
+# invented one, but could NOT be confirmed changing a real app's appearance live in
+# the guest image. GTK4 and libadwaita are not part of the metapackage's dependency
+# graph (nothing in this repository currently installs them) and the guest has no
+# network (`-nic none`, harness/spike/vm_capture.py) to add a GTK4 test app for the
+# investigation. A live A/B test WAS possible with GTK3 instead (already present via
+# firefox, a dependency of the test image): a throwaway theme with an unmistakable
+# gtk.css vs. gtk-dark.css colour difference was installed and selected through
+# exactly this gtk-3.0/settings.ini mechanism (gtk-theme-name + prefer-dark-theme),
+# then Firefox was launched fresh -- no visible change of any kind, even though the
+# portal-based mechanism (docs/SHELL_CONTRACT.md's "Dark mode" section) demonstrably
+# DOES change live in the same image. The most likely explanation is that Firefox's
+# own chrome does not render through the system GTK theme's CSS at all (a known
+# Firefox/GTK quirk, not necessarily evidence that the gtk.css/gtk-dark.css swap
+# itself is broken for a plain GTK app) and instead follows the portal -- but this
+# could not be told apart from "the mechanism does not work in this image" with the
+# tools available. Shipped anyway because docs/SHELL_CONTRACT.md's package() step
+# already names this exact install path and it is a plain config file, not the kind
+# of bespoke work the working brief's escalation rule would stop this change on --
+# but its visual effect is UNVERIFIED, unlike the Kvantum and portal mechanisms.
+[Settings]
+gtk-theme-name=@NAME@
+gtk-application-prefer-dark-theme=false

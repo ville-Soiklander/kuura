@@ -8,11 +8,15 @@ this package (design.validate, design.generators.*).
 Usage (from the project root):
     python -m design.generate [--tokens FILE] [--out-dir DIR] [--name NAME]
 
-Output layout under the output directory (both modes for every target):
+Output layout under the output directory (both modes for every target, plus
+three mode-independent layout files):
     plasma/<name>-light.colors   plasma/<name>-dark.colors    (generators.plasma_colors)
     kvantum/<name>-light.kvconfig kvantum/<name>-dark.kvconfig (generators.kvantum)
     gtk/<name>-light.css         gtk/<name>-dark.css          (generators.gtk_css)
     qml/Tokens-light.qml         qml/Tokens-dark.qml          (generators.qml_singleton)
+    layout/plasma-org.kde.plasma.desktop-appletsrc              (generators.plasma_layout.render)
+    layout/plasmashellrc                                         (generators.plasma_layout.render_view_settings)
+    layout/kactivitymanagerdrc                                   (generators.plasma_layout.render_activities)
 
 Defaults, nothing hard coded: --tokens = the tokens.json next to this file;
 --out-dir = ".build/generated" relative to the project root (the parent of this
@@ -41,7 +45,14 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         name: Theme name passed to the generators and used in file names.
 
     Returns:
-        The paths of all written files, sorted, always 8 entries.
+        The paths of all written files, sorted, always 11 entries: the 4
+        mode-dependent generators below times 2 modes (light/dark), plus three
+        mode-independent panel layout files (layout has no light/dark
+        variant, so generators.plasma_layout's three functions are each called
+        once, not per mode: render() for the appletsrc, render_view_settings()
+        for the panel thickness/floating settings appletsrc cannot express, and
+        render_activities() for the matching activity id - see plasma_layout's
+        own module docstring for why there are three).
 
     Raises:
         ValueError: if name is not lowercase letters, digits, "_" or "-".
@@ -51,7 +62,7 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         raise ValueError("name must be lowercase letters, digits, '_' or '-'")
 
     # Import generators here to avoid circular imports
-    from design.generators import gtk_css, qml_singleton, plasma_colors, kvantum
+    from design.generators import gtk_css, qml_singleton, plasma_colors, kvantum, plasma_layout
 
     # Create output directory
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -64,7 +75,9 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         "gtk": "css",
     }
 
-    # Define the 4 generators: each produces 2 files (light and dark)
+    # Define the 4 mode-dependent generators: each produces 2 files (light
+    # and dark). plasma_layout is deliberately NOT in this list - it has no
+    # light/dark variant, so it is rendered once below instead of per mode.
     # Each generator has a name and render function
     generators = [
         ("plasma", plasma_colors),
@@ -97,6 +110,31 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
             # Write the file
             file_path.write_text(content, encoding="utf-8")
             written_paths.append(file_path)
+
+    # Panel layout: mode-independent (no light/dark variant), so it is
+    # rendered and written once, outside the light/dark loop above, to its
+    # own "layout" subdirectory rather than one of the 4 generators' dirs.
+    # THREE files, all named after their real install target (Plasma's own filenames,
+    # not "<name>-..." as before) -- panel thickness/floating/centring turned out live
+    # to be stored in plasmashellrc, not in appletsrc, and the desktop containment's
+    # activityId needs a matching kactivitymanagerdrc or it refers to an activity
+    # nothing else knows about (see plasma_layout's own module docstring, "SECOND FILE
+    # DISCOVERED" / "THIRD FILE"), so all three must be generated and shipped together
+    # for the panel layout to actually take effect and the desktop to stay intact.
+    layout_subdir = out_dir / "layout"
+    layout_subdir.mkdir(parents=True, exist_ok=True)
+
+    appletsrc_path = layout_subdir / "plasma-org.kde.plasma.desktop-appletsrc"
+    appletsrc_path.write_text(plasma_layout.render(tokens), encoding="utf-8")
+    written_paths.append(appletsrc_path)
+
+    plasmashellrc_path = layout_subdir / "plasmashellrc"
+    plasmashellrc_path.write_text(plasma_layout.render_view_settings(tokens), encoding="utf-8")
+    written_paths.append(plasmashellrc_path)
+
+    kactivitymanagerdrc_path = layout_subdir / "kactivitymanagerdrc"
+    kactivitymanagerdrc_path.write_text(plasma_layout.render_activities(tokens), encoding="utf-8")
+    written_paths.append(kactivitymanagerdrc_path)
 
     # Return sorted paths
     return sorted(written_paths)

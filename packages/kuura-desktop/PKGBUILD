@@ -37,6 +37,12 @@ depends=(
     'konsole'
     # Theme engine
     'kvantum'
+    # Desktop shell theming (panel layout, KWin tuning, shortcuts, Kvantum/GTK4
+    # theme) - a package of this monorepo (packages/kuura-shell/PKGBUILD), so its
+    # name is built from the same DISTRO_NAME variable as this package's own name
+    # instead of being a literal string like the entries above (docs/SHELL_CONTRACT.md:
+    # "installed by kuura-desktop (added to its depends)").
+    "${DISTRO_NAME}-shell"
     # Audio and network applets
     'plasma-nm'
     'plasma-pa'
