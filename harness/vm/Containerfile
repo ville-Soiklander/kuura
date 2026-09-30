@@ -138,9 +138,20 @@ RUN chmod -R a+rX /srv/repo \
     && printf '\n[%s]\nSigLevel = Required DatabaseRequired\nServer = file:///srv/repo/x86_64\n' \
         "${DISTRO_NAME}" >> /etc/pacman.conf \
     && pacman -Sy --noconfirm \
-    && pacman -S --noconfirm "${DISTRO_NAME}-desktop" \
+    && pacman -S --noconfirm "${DISTRO_NAME}-desktop" "${DISTRO_NAME}-frost" \
     && rm -rf /var/cache/pacman/pkg/* /srv/repo \
     && sed -i "/^\[${DISTRO_NAME}\]\$/,\$d" /etc/pacman.conf
+
+# TEST IMAGE ONLY, TEMPORARY (Vaihe 4 chain-position/texture-capture
+# investigation, docs/BUILD_CONTRACT.md's own "test-only tools" precedent):
+# kuura-frost is installed above alongside the metapackage so this image can
+# screenshot its diagnostic tint shader against a real blurred Wayland
+# surface (KRunner/the panel). It is deliberately NOT added to
+# kuura-desktop's own `depends` (packages/kuura-desktop/PKGBUILD) -- that is a
+# later, deliberate decision once the real material shader exists, not a side
+# effect of this bounded test. Remove this line (or fold it into the real
+# metapackage depends, per that later decision) once Frost's real shader
+# lands and this becomes a permanent part of the shipped desktop.
 
 # Fail the build early, with a clear message, if a program a state needs is missing:
 # notify-send, the browser, the file manager, System Settings, the KRunner UI and the

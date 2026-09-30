@@ -1,0 +1,74 @@
+# Frost: the desktop shell's glass "material" KWin compositor effect (Vaihe 4
+# of the working brief). Unlike kuura-desktop/kuura-shell, this package compiles
+# real, ABI-sensitive native code against the pinned Arch snapshot's own KWin
+# headers/CMake package config (packages/kuura-frost/CMakeLists.txt's own
+# comments record exactly which real build failures made each makedepends
+# below necessary -- nothing here is a guessed toolchain list).
+#
+# src/frost.h is the locked interface/contract for the effect; src/frost.cpp
+# currently implements only the window-targeting logic (matching Blur's own
+# blur-region detection) and a throwaway diagnostic tint shader used to answer
+# the class docstring's chain-position question empirically -- not the
+# finished refraction/specular/noise material shader, which is later work.
+#
+# The package name comes from the environment (DISTRO_NAME, see .env.example),
+# the same convention as kuura-desktop/kuura-shell; building by hand without it
+# fails with a clear error. makepkg is run through build/build_repo.sh, which
+# exports the variable.
+
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-frost"
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Glass 'material' KWin compositor effect (background blur reuse, edge refraction, specular highlight, dither noise)"
+# Unlike kuura-desktop/kuura-shell (arch=('any'): pure config/scripts), this
+# package compiles a native .so against KWin's C++ effect ABI, which is NOT
+# stable across versions (frost.h's class docstring) -- it is tied to exactly
+# the pinned snapshot's kwin/qt6-base/kcoreaddons, hence a real architecture.
+arch=('x86_64')
+url='https://github.com/ville-Soiklander/kuura'
+# Code, configuration and scripts of the project are GPL-3.0-or-later (see
+# LICENSE and docs/LICENSES/README.md).
+license=('GPL-3.0-or-later')
+# kwin: the compositor this plugin loads into at runtime (metadata.json is
+# read by KWin's own effect loader; the compiled .so is installed under its
+# plugin search path -- see package() below).
+depends=('kwin')
+# Real C++ toolchain needed to configure+build the CMake project below --
+# see packages/kuura-frost/CMakeLists.txt's own comments for exactly why each
+# one is required (each was confirmed by a real failing build first, not
+# assumed in advance):
+#   extra-cmake-modules   KDEInstallDirs/KDECMakeSettings, ECM_GLOBAL_FIND_VERSION
+#   cmake, ninja           the build system itself (kcoreaddons_add_plugin's
+#                          MODULE branch needs CMAKE_LIBRARY_OUTPUT_DIRECTORY,
+#                          which KDECMakeSettings supplies)
+#   qt6-base               Qt6::Core/Gui/Widgets -- KWin::kwin's own exported
+#                          CMake target links Qt6::Widgets even though this
+#                          effect draws nothing with it directly
+#   kwin                   the effect headers and KWin::kwin/KWin package
+#                          config this plugin builds against
+#   kcoreaddons            kcoreaddons_add_plugin(), the real out-of-tree
+#                          KWin effect plugin registration macro
+#   vulkan-headers         KWin::kwin's own exported target pulls in Vulkan
+#                          headers transitively (confirmed by a real build
+#                          failure before this was added)
+makedepends=('extra-cmake-modules' 'cmake' 'ninja' 'qt6-base' 'kwin' 'kcoreaddons' 'vulkan-headers')
+
+# build(): configures and builds the CMake project in place. Unlike
+# kuura-shell (no source= array either, but its build() reaches OUT to
+# design/generate.py two directories above this PKGBUILD), kuura-frost's own
+# CMakeLists.txt and src/ already sit directly next to this PKGBUILD -- one
+# level below $srcdir (makepkg's own auto-created build directory, empty here
+# since there is no source= to extract into it), so `cd "$srcdir/.."` reaches
+# them, the same relative-navigation idiom kuura-shell's build() already uses.
+build() {
+    ( cd "$srcdir/.." && cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr \
+        && cmake --build build )
+}
+
+# package(): installs the just-built plugin (.so + metadata.json) via CMake's
+# own install() rules (kcoreaddons_add_plugin's INSTALL_NAMESPACE, see
+# CMakeLists.txt) into $pkgdir, exactly as `cmake --install` would onto a real
+# system -- nothing here re-derives the install path by hand.
+package() {
+    ( cd "$srcdir/.." && DESTDIR="$pkgdir" cmake --install build )
+}

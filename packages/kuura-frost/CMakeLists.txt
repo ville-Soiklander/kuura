@@ -72,6 +72,16 @@ include(KDECMakeSettings)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 find_package(KF6CoreAddons REQUIRED)
 find_package(KWin REQUIRED)
+# WHY: frost.cpp reads a window's decoration blur region the same way
+# BlurEffect does (window->decoration()->blurRegion(), confirmed at blur.cpp),
+# which needs <KDecoration3/Decoration>. That header is real and installed
+# (/usr/include/KDecoration3/KDecoration3/Decoration -- the doubled path
+# segment is KDecoration3's own layout, not a mistake) but is NOT reachable
+# through KWin::kwin's own include paths -- confirmed by a real build failure
+# ("KDecoration3/Decoration: No such file or directory") before this was
+# added. find_package(KDecoration3) is what supplies the right -isystem
+# include path via its own exported target below.
+find_package(KDecoration3 REQUIRED)
 
 kcoreaddons_add_plugin(kuura_frost
     SOURCES src/frost.cpp src/main.cpp
@@ -84,6 +94,7 @@ target_link_libraries(kuura_frost PRIVATE
     Qt6::Widgets
     KF6::CoreAddons
     KWin::kwin
+    KDecoration3::KDecoration
 )
 
 target_include_directories(kuura_frost PRIVATE
