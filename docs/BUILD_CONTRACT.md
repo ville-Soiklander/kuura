@@ -75,8 +75,14 @@ on CI runners); the build never needs a root-owned container engine.
   audio and network applets, the PipeWire audio stack (PulseAudio and JACK
   compatibility layers; `pipewire-jack` is listed explicitly and FIRST, because
   pacman resolves dependencies depth first in list order and would otherwise pick
-  the unrelated `jack2` server as the `jack` provider), Wayland support
-  and the two font packages (Inter, JetBrains Mono).
+  the unrelated `jack2` server as the `jack` provider), Wayland support,
+  the two font packages (Inter, JetBrains Mono), the cursor theme
+  (Capitaine, chosen over KDE's default Breeze cursors for a distinct look
+  fitting this project's own visual language - see `docs/ASSETS.md`), and
+  `$(DISTRO_NAME)-assets` (a package of this monorepo: the own-production
+  icon set, wallpapers and UI sounds, Vaihe 5 - see
+  `packages/kuura-assets/PKGBUILD`'s own SCOPE comment for exactly what is
+  and is not live-verified yet).
 - Every PKGBUILD passes `namcap` without errors.
 - Third-party assets (fonts, icons) are listed in `docs/ASSETS.md` before merge.
 

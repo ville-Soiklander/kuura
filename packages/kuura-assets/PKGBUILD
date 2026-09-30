@@ -1,0 +1,145 @@
+# Own-production visual/audio assets (Vaihe 5 of the working brief, "Omat
+# assetit"): the icon set, wallpapers and UI sounds design/generate_icons.py,
+# design/generate_wallpapers.py and design/generate_sounds.py produce from
+# design/tokens.json. Ships no upstream source, like kuura-shell/kuura-desktop;
+# built from this monorepo at package-build time, never at first login.
+#
+# The package name comes from the environment (DISTRO_NAME, see .env.example),
+# the same convention as kuura-shell/kuura-desktop; building by hand without it
+# fails with a clear error. makepkg is run through build/build_repo.sh, which
+# exports the variable.
+#
+# SCOPE (a deliberate, documented boundary, not an oversight): this package
+# installs the icon set as a MINIMAL icon theme (index.theme + real
+# icon-naming-spec names, Inherits=breeze so every icon this theme does not
+# override still resolves) rather than a fully live-verified integration -
+# unlike this project's Kvantum/GTK4 install layout (packages/kuura-shell/
+# PKGBUILD's own package(), see its comments), the exact names/paths below
+# were NOT confirmed against a real booted session before this package first
+# shipped. Two things are intentionally left out for the same reason: (1) the
+# "systray" glyph (design/icons/glyphs.py) is generated but NOT installed
+# here - there is no single correct freedesktop icon-naming-spec name for a
+# generic status-tray icon, it depends on which specific status a theme wants
+# to override, which this project has not yet decided; (2) the UI sounds are
+# installed as plain files, not wired into a freedesktop sound-theme-spec
+# index.theme (no event->file mapping) - KDE's notification sound picker will
+# not offer them automatically yet. Revisit both with a real guest-image boot
+# test before relying on either being visually/audibly active by default.
+
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-assets"
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Icon set, wallpapers and UI sounds generated from design/tokens.json"
+arch=('any')
+url='https://github.com/ville-Soiklander/kuura'
+# Code, configuration and this package's own generated assets are
+# GPL-3.0-or-later (see LICENSE and docs/LICENSES/README.md). The assets
+# themselves are this project's own procedural output (see docs/ASSETS.md),
+# not a third-party work with its own separate license.
+license=('GPL-3.0-or-later')
+# breeze-icons: this theme's own index.theme sets Inherits=breeze (see SCOPE
+# above), so every icon this package does not itself provide must still
+# resolve through a real, installed fallback theme.
+depends=('breeze-icons')
+# python: build() runs the three design/generate_*.py modules through their
+# own `python -m` CLIs. generate_wallpapers.py needs Pillow (see its own
+# module docstring and requirements.txt); generate_icons.py/generate_sounds.py
+# are standard-library only. Pillow is a Python dependency of the BUILD step,
+# not something the installed package needs at runtime, so it is not listed
+# here - makedepends installs it via the pinned toolchain's pip, matching how
+# this project already separates build-time from run-time Python needs.
+makedepends=('python' 'python-pillow')
+
+# build(): generate the icon SVGs, wallpaper PNGs and sound WAVs into three
+# separate output trees (kept apart, unlike kuura-shell's single design.generate
+# call, because these are three independent generator modules with their own
+# CLIs - see each module's own docstring for why it is not folded into
+# design/generate.py's own locked, fixed-count manifest).
+build() {
+    ( cd "$srcdir/../../.." && python3 -m design.generate_icons \
+        --out-dir "$srcdir/generated-icons" --name "$DISTRO_NAME" )
+    ( cd "$srcdir/../../.." && python3 -m design.generate_wallpapers \
+        --out-dir "$srcdir/generated-wallpapers" --name "$DISTRO_NAME" )
+    ( cd "$srcdir/../../.." && python3 -m design.generate_sounds \
+        --out-dir "$srcdir/generated-sounds" --name "$DISTRO_NAME" )
+}
+
+# package(): installs each generated tree to its own real, standard system
+# location - see SCOPE above for exactly what is and is not wired into the
+# desktop's own icon/sound-theme machinery yet.
+package() {
+    local icons="$srcdir/generated-icons/icons"
+    local wallpapers="$srcdir/generated-wallpapers/wallpapers"
+    local sounds="$srcdir/generated-sounds/sounds"
+    local theme_dir="$pkgdir/usr/share/icons/${DISTRO_NAME}"
+
+    # ---- Icons: real freedesktop icon-naming-spec names, one context
+    # subdirectory per icon (apps/places/mimetypes - the spec's own division,
+    # not this project's invention). "systray" is deliberately NOT installed
+    # (see SCOPE above). ----
+    install -Dm644 "$icons/file_manager.svg" \
+        "$theme_dir/scalable/apps/system-file-manager.svg"
+    install -Dm644 "$icons/settings.svg" \
+        "$theme_dir/scalable/apps/preferences-system.svg"
+    install -Dm644 "$icons/terminal.svg" \
+        "$theme_dir/scalable/apps/utilities-terminal.svg"
+    install -Dm644 "$icons/browser.svg" \
+        "$theme_dir/scalable/apps/web-browser.svg"
+    install -Dm644 "$icons/folder.svg" \
+        "$theme_dir/scalable/places/folder.svg"
+    install -Dm644 "$icons/file_document.svg" \
+        "$theme_dir/scalable/mimetypes/text-x-generic.svg"
+    install -Dm644 "$icons/file_image.svg" \
+        "$theme_dir/scalable/mimetypes/image-x-generic.svg"
+    install -Dm644 "$icons/file_archive.svg" \
+        "$theme_dir/scalable/mimetypes/package-x-generic.svg"
+    install -Dm644 "$icons/file_code.svg" \
+        "$theme_dir/scalable/mimetypes/text-x-script.svg"
+
+    # index.theme: the minimal real fields a freedesktop icon theme needs
+    # (Icon Theme Specification: [Icon Theme] Name/Comment/Inherits/
+    # Directories, one [<subdir>] section per Directories entry giving its
+    # Size/Type). Type=Scalable + Size=48 (freedesktop's own documented
+    # default/nominal size for a scalable-only entry) tells consumers these
+    # SVGs may be requested at any size, not just 48px.
+    cat > "$theme_dir/index.theme" << EOF
+[Icon Theme]
+Name=${DISTRO_NAME}
+Comment=Icon set generated from ${DISTRO_NAME}'s own design tokens
+Inherits=breeze
+Directories=scalable/apps,scalable/places,scalable/mimetypes
+
+[scalable/apps]
+Size=48
+Type=Scalable
+Context=Applications
+
+[scalable/places]
+Size=48
+Type=Scalable
+Context=Places
+
+[scalable/mimetypes]
+Size=48
+Type=Scalable
+Context=MimeTypes
+EOF
+
+    # ---- Wallpapers: plain PNGs under a standard, widely-recognised
+    # location every major desktop's wallpaper picker can browse to directly
+    # (no per-wallpaper metadata.desktop/KPackage structure - that is a KDE-
+    # specific refinement left for later, see SCOPE above). ----
+    local wallpaper_dir="$pkgdir/usr/share/backgrounds/${DISTRO_NAME}"
+    local f
+    for f in "$wallpapers"/*.png; do
+        install -Dm644 "$f" "$wallpaper_dir/$(basename "$f")"
+    done
+
+    # ---- Sounds: plain WAVs under a real, standard sound-asset location
+    # (not yet a freedesktop sound-theme-spec index.theme - see SCOPE
+    # above). ----
+    local sound_dir="$pkgdir/usr/share/sounds/${DISTRO_NAME}"
+    for f in "$sounds"/*.wav; do
+        install -Dm644 "$f" "$sound_dir/$(basename "$f")"
+    done
+}

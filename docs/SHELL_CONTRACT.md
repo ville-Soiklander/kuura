@@ -21,9 +21,10 @@ surfaces themselves (that is later work). Delivers:
 6. Kvantum (Qt) and GTK4/libadwaita theming installed and set as the system default.
 
 **DoD** (verified with the V2 harness, `docs/HARNESS_CONTRACT.md`): `desktop-empty`,
-`menubar-open`, `shelf-hover` (the brief's "dock-hover"), `overview`, `search-open` pass
-the pixel comparison against new, human-approved goldens. The global menu shows real
-menus for both a Qt application (Dolphin) and a GTK application.
+`menubar-open`, `shelf-hover` (renamed from the working brief's own original term for
+this element, which named a different desktop environment's launcher tray), `overview`,
+`search-open` pass the pixel comparison against new, human-approved goldens. The global
+menu shows real menus for both a Qt application (Dolphin) and a GTK application.
 
 ## Package: `packages/kuura-shell/`
 

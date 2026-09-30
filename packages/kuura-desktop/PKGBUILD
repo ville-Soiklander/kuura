@@ -37,6 +37,14 @@ depends=(
     'konsole'
     # Theme engine
     'kvantum'
+    # Cursor theme - a macOS-inspired variant of KDE Breeze cursors (the default
+    # KDE would otherwise pull in transitively via kwin -> breeze -> breeze-cursors,
+    # which stays fine too but gives no distinct look); see docs/ASSETS.md.
+    'capitaine-cursors'
+    # Own-production icon set, wallpapers and UI sounds (Vaihe 5, a package of
+    # this monorepo, docs/ASSETS.md's own-production note) - built from the
+    # same DISTRO_NAME variable as this package's own name.
+    "${DISTRO_NAME}-assets"
     # Desktop shell theming (panel layout, KWin tuning, shortcuts, Kvantum/GTK4
     # theme) - a package of this monorepo (packages/kuura-shell/PKGBUILD), so its
     # name is built from the same DISTRO_NAME variable as this package's own name
