@@ -9,7 +9,7 @@ Usage (from the project root):
     python -m design.generate [--tokens FILE] [--out-dir DIR] [--name NAME]
 
 Output layout under the output directory (both modes for every target, plus
-four mode-independent layout/header files):
+five mode-independent layout/header/fontconfig files):
     plasma/<name>-light.colors   plasma/<name>-dark.colors    (generators.plasma_colors)
     kvantum/<name>-light.kvconfig kvantum/<name>-dark.kvconfig (generators.kvantum)
     gtk/<name>-light.css         gtk/<name>-dark.css          (generators.gtk_css)
@@ -18,6 +18,7 @@ four mode-independent layout/header files):
     layout/plasmashellrc                                         (generators.plasma_layout.render_view_settings)
     layout/kactivitymanagerdrc                                   (generators.plasma_layout.render_activities)
     cpp/tokens.h                                                 (generators.cpp_header.render)
+    fontconfig/<name>-fonts.conf                                 (generators.fontconfig.render)
 
 Defaults, nothing hard coded: --tokens = the tokens.json next to this file;
 --out-dir = ".build/generated" relative to the project root (the parent of this
@@ -46,7 +47,7 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         name: Theme name passed to the generators and used in file names.
 
     Returns:
-        The paths of all written files, sorted, always 12 entries: the 4
+        The paths of all written files, sorted, always 13 entries: the 4
         mode-dependent generators below times 2 modes (light/dark), plus three
         mode-independent panel layout files (layout has no light/dark
         variant, so generators.plasma_layout's three functions are each called
@@ -57,7 +58,10 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         C++ token header (generators.cpp_header.render() - colour tokens are
         mode-dependent and that generator's locked signature takes no mode
         argument at all, see its own module docstring, so like plasma_layout it
-        is rendered once, not per mode).
+        is rendered once, not per mode), plus ONE mode-independent fontconfig
+        alias file (generators.fontconfig.render(tokens, name) - also no mode
+        argument, for the same reason, but DOES take name since the alias
+        family itself is branded per distro; see that module's own docstring).
 
     Raises:
         ValueError: if name is not lowercase letters, digits, "_" or "-".
@@ -67,7 +71,7 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         raise ValueError("name must be lowercase letters, digits, '_' or '-'")
 
     # Import generators here to avoid circular imports
-    from design.generators import cpp_header, gtk_css, qml_singleton, plasma_colors, kvantum, plasma_layout
+    from design.generators import cpp_header, fontconfig, gtk_css, qml_singleton, plasma_colors, kvantum, plasma_layout
 
     # Create output directory
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -154,6 +158,16 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
     tokens_header_path = cpp_subdir / "tokens.h"
     tokens_header_path.write_text(cpp_header.render(tokens), encoding="utf-8")
     written_paths.append(tokens_header_path)
+
+    # Fontconfig alias: mode-independent like the two blocks above, but DOES take
+    # `name` (the alias family itself is branded per distro, e.g. "Kuura Sans") -
+    # see design/generators/fontconfig.py's own module docstring.
+    fontconfig_subdir = out_dir / "fontconfig"
+    fontconfig_subdir.mkdir(parents=True, exist_ok=True)
+
+    fontconfig_path = fontconfig_subdir / f"{name}-fonts.conf"
+    fontconfig_path.write_text(fontconfig.render(tokens, name), encoding="utf-8")
+    written_paths.append(fontconfig_path)
 
     # Return sorted paths
     return sorted(written_paths)

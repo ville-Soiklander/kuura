@@ -121,6 +121,23 @@ package() {
     install -Dm644 "$generated/layout/kactivitymanagerdrc" \
         "$pkgdir/etc/skel/.config/kactivitymanagerdrc"
 
+    # ---- Fontconfig alias ("<Name> Sans"/"<Name> Mono" -> Inter/JetBrains Mono):
+    # ships to conf.avail/ and is symlinked from conf.default/, NOT installed
+    # directly into /etc/fonts/conf.d/ -- confirmed against archlinux.org's own
+    # fontconfig-config-handling-rebuild packaging note: a pacman hook mirrors
+    # conf.default/ into the real, live /etc/fonts/conf.d/ on install/upgrade,
+    # specifically so conf.d/ itself survives upgrades without being reset. 51-
+    # (not 30/48/49/60, the tiers the fontconfig package itself already occupies)
+    # matches the same "local/site addition" tier as fontconfig's own shipped
+    # 50-user.conf/51-local.conf, and loads well before the 60-* generic-family
+    # fallback tier this alias must win against.
+    install -Dm644 "$generated/fontconfig/${DISTRO_NAME}-fonts.conf" \
+        "$pkgdir/usr/share/fontconfig/conf.avail/51-${DISTRO_NAME}-fonts.conf"
+    # `ln`, unlike `install -D` above, does not create leading directories itself.
+    install -dm755 "$pkgdir/usr/share/fontconfig/conf.default"
+    ln -sf "../conf.avail/51-${DISTRO_NAME}-fonts.conf" \
+        "$pkgdir/usr/share/fontconfig/conf.default/51-${DISTRO_NAME}-fonts.conf"
+
     # ---- skel: default configuration for new users, installed verbatim. ----
     install -Dm644 "$skel/.config/kwinrc" "$pkgdir/etc/skel/.config/kwinrc"
     install -Dm644 "$skel/.config/kglobalshortcutsrc" \

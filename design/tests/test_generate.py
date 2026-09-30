@@ -29,7 +29,7 @@ class TestGenerate:
             result = generate(tokens, tmp_path, "test_theme")
 
         # Verify exactly 12 files were created
-        assert len(result) == 12, f"Expected 12 files, got {len(result)}: {result}"
+        assert len(result) == 13, f"Expected 13 files, got {len(result)}: {result}"
 
         # Verify all files exist
         for path in result:
@@ -55,7 +55,8 @@ class TestGenerate:
 
         # Verify directory structure
         dirs = set(p.parent.name for p in result)
-        assert dirs == {"plasma", "kvantum", "gtk", "qml", "layout", "cpp"}, f"Expected 6 directories, got {dirs}"
+        assert dirs == {"plasma", "kvantum", "gtk", "qml", "layout", "cpp", "fontconfig"}, \
+            f"Expected 7 directories, got {dirs}"
 
         # Verify filenames contain the theme name (except qml's, layout's and cpp's
         # own fixed, real-target filenames, which do not vary by theme name)
@@ -110,7 +111,7 @@ class TestGenerate:
                  patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
                  patch("design.generators.cpp_header.render", return_value="// header output\n"):
                 result = generate(tokens, tmp_path, valid_name)
-                assert len(result) == 12
+                assert len(result) == 13
 
     def test_generate_calls_all_six_generators(self, tmp_path):
         """generate() should call all six generator.render() functions."""
@@ -250,7 +251,7 @@ class TestMain:
         assert out_dir.exists(), "Output directory should be created"
         # Verify files were written (only count files, not directories)
         files = [p for p in out_dir.rglob("*") if p.is_file()]
-        assert len(files) == 12, f"Expected 12 files, got {len(files)}: {files}"
+        assert len(files) == 13, f"Expected 13 files, got {len(files)}: {files}"
 
     def test_main_default_tokens_path(self, tmp_path):
         """main() should use default tokens.json if not specified."""
@@ -451,7 +452,7 @@ class TestEndToEnd:
         result = generate(tokens, tmp_path, "e2e_theme")
 
         # Verify 12 files were created
-        assert len(result) == 12
+        assert len(result) == 13
         for path in result:
             assert path.exists(), f"File not created: {path}"
             # Verify file is not empty and ends with newline
