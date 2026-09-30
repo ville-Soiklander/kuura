@@ -274,6 +274,87 @@ protected:
      * before redirect() is ever called for a given window (see the class
      * docstring's open question about surface selection).
      *
+     * THE REAL MATERIAL SHADER (replaces loadShaders()'s current DIAGNOSTIC
+     * ONLY red-tint fragment source -- this is the locked mathematical
+     * specification the working brief asks for, "a reference implementation,
+     * not an instruction to just make a glass effect"). Given per-pixel:
+     *   - `texcoord0`, the normalized [0,1] UV already sampling Frost's
+     *     captured texture (confirmed real, already used by the diagnostic
+     *     shader) -- which, per requestedEffectChainPosition()'s resolved
+     *     trace, already contains Blur's blurred background for any window
+     *     this class redirects. Frost's shader therefore does NOT reimplement
+     *     dual-Kawase blur; it only adds the three effects below on top of
+     *     what it samples.
+     *   - `windowSize`, the window's real pixel dimensions -- NOT YET a
+     *     uniform; apply() or loadShaders() must add one, sourced from
+     *     EffectWindow's real size accessor (verify the exact method name
+     *     live/in effectwindow.h rather than assuming `width()`/`height()`
+     *     are it).
+     *
+     * 1. EDGE DISTANCE (shared by both effects below): let
+     *    `pixelPos = texcoord0 * windowSize` and
+     *    `edgeDist = min(pixelPos.x, windowSize.x - pixelPos.x, pixelPos.y,
+     *    windowSize.y - pixelPos.y)` -- the distance in pixels to the NEAREST
+     *    of the window's four edges. The nearest edge's outward-facing unit
+     *    normal (left: (-1,0), right: (1,0), top: (0,-1), bottom: (0,1)) is
+     *    whichever of the four distances above was the minimum.
+     *
+     * 2. EDGE REFRACTION: `falloff = clamp(1.0 - edgeDist /
+     *    material.refraction.edge_falloff, 0.0, 1.0)` (1.0 exactly at the
+     *    edge, linearly reaching 0.0 at edge_falloff pixels inward -- "decays
+     *    to zero over edge_falloff pixels", per the class docstring's
+     *    phenomenon list). The sample offset is
+     *    `normal * (material.refraction.strength * material.refraction.edge_falloff)
+     *    * falloff`, in PIXELS (so `strength` reads as a fraction of the
+     *    falloff distance -- e.g. strength=0.035, edge_falloff=12px gives a
+     *    ~0.42px maximum displacement right at the edge); convert to UV by
+     *    dividing by `windowSize` before adding to `texcoord0`, and CLAMP the
+     *    resulting sample coordinate to [0,1] (sampling past the texture edge
+     *    is undefined/wraps, not "no refraction").
+     *
+     * 3. SPECULAR EDGE HIGHLIGHT: the brief's fixed light direction (top-left)
+     *    means only the TOP and LEFT edges get a highlight, never right/
+     *    bottom. Using the same `pixelPos`: `topStrength = clamp(1.0 -
+     *    pixelPos.y / material.edge_highlight.width, 0.0, 1.0)`,
+     *    `leftStrength = clamp(1.0 - pixelPos.x / material.edge_highlight.width,
+     *    0.0, 1.0)`, `highlight = max(topStrength, leftStrength)` (a window
+     *    pixel near the top-left CORNER is on both edges at once; take the
+     *    stronger, do not add them -- avoids a double-bright corner). Blend a
+     *    solid white toward the refracted colour by
+     *    `highlight * material.edge_highlight.opacity`.
+     *
+     * 4. DITHER NOISE: material.noise scales the same red-channel-only,
+     *    alpha-0 additive technique KWin's own blur/shaders/noise.frag
+     *    already implements (see the class docstring) -- reuse that
+     *    technique's real sampling convention (a tiled noise texture sampled
+     *    at `gl_FragCoord.xy / noiseTextureSize`) rather than inventing a
+     *    different noise function; verify the exact noise-texture source
+     *    Blur uses (BlurEffect::updateTexture() or equivalent, per blur.cpp)
+     *    live before assuming Frost can reuse the SAME texture object versus
+     *    needing its own copy.
+     *
+     * All four `material.*` values above (strength, edge_falloff, width,
+     * opacity, noise) are design tokens (design/tokens.json) that must reach
+     * this shader as per-frame uniforms set from apply()/loadShaders() via
+     * `GLShader::setUniform()` -- see the tokens.json -> C++ header generator
+     * proposal in this project's own V4 investigation notes (a 6th
+     * design/generators/ module) for how the numeric values themselves reach
+     * compiled C++ in the first place; do not hand-copy the current
+     * tokens.json values as shader-source literals, since that silently
+     * breaks the moment a token changes.
+     *
+     * TESTABLE WITHOUT A REAL KWIN SESSION: this whole specification (the
+     * edge-distance/falloff/highlight/noise math, points 1-4 above) is pure
+     * per-pixel fragment-shader arithmetic with no compositor-specific state
+     * -- render it offscreen against a fixed, known input texture (a small
+     * headless EGL/GL context, e.g. via mesa's own software GL, already
+     * available in the pinned toolchain) and compare specific sampled output
+     * pixels (a corner, an edge midpoint, the centre) against hand-computed
+     * expected values +/- epsilon, exactly the "known background, computed
+     * pixel vs. expected" test the working brief asks for. This does not need
+     * KWin, redirect(), or a live guest boot at all -- keep it that way, it
+     * is far cheaper to iterate on than another boot_capture.sh cycle.
+     *
      * @param window the window being composited this frame
      * @param mask compositing paint mask, forwarded from KWin, not
      *     interpreted by this method beyond passing it through
