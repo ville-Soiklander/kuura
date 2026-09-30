@@ -9,7 +9,7 @@ Usage (from the project root):
     python -m design.generate [--tokens FILE] [--out-dir DIR] [--name NAME]
 
 Output layout under the output directory (both modes for every target, plus
-three mode-independent layout files):
+four mode-independent layout/header files):
     plasma/<name>-light.colors   plasma/<name>-dark.colors    (generators.plasma_colors)
     kvantum/<name>-light.kvconfig kvantum/<name>-dark.kvconfig (generators.kvantum)
     gtk/<name>-light.css         gtk/<name>-dark.css          (generators.gtk_css)
@@ -17,6 +17,7 @@ three mode-independent layout files):
     layout/plasma-org.kde.plasma.desktop-appletsrc              (generators.plasma_layout.render)
     layout/plasmashellrc                                         (generators.plasma_layout.render_view_settings)
     layout/kactivitymanagerdrc                                   (generators.plasma_layout.render_activities)
+    cpp/tokens.h                                                 (generators.cpp_header.render)
 
 Defaults, nothing hard coded: --tokens = the tokens.json next to this file;
 --out-dir = ".build/generated" relative to the project root (the parent of this
@@ -45,14 +46,18 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         name: Theme name passed to the generators and used in file names.
 
     Returns:
-        The paths of all written files, sorted, always 11 entries: the 4
+        The paths of all written files, sorted, always 12 entries: the 4
         mode-dependent generators below times 2 modes (light/dark), plus three
         mode-independent panel layout files (layout has no light/dark
         variant, so generators.plasma_layout's three functions are each called
         once, not per mode: render() for the appletsrc, render_view_settings()
         for the panel thickness/floating settings appletsrc cannot express, and
         render_activities() for the matching activity id - see plasma_layout's
-        own module docstring for why there are three).
+        own module docstring for why there are three), plus ONE mode-independent
+        C++ token header (generators.cpp_header.render() - colour tokens are
+        mode-dependent and that generator's locked signature takes no mode
+        argument at all, see its own module docstring, so like plasma_layout it
+        is rendered once, not per mode).
 
     Raises:
         ValueError: if name is not lowercase letters, digits, "_" or "-".
@@ -62,7 +67,7 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         raise ValueError("name must be lowercase letters, digits, '_' or '-'")
 
     # Import generators here to avoid circular imports
-    from design.generators import gtk_css, qml_singleton, plasma_colors, kvantum, plasma_layout
+    from design.generators import cpp_header, gtk_css, qml_singleton, plasma_colors, kvantum, plasma_layout
 
     # Create output directory
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -135,6 +140,20 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
     kactivitymanagerdrc_path = layout_subdir / "kactivitymanagerdrc"
     kactivitymanagerdrc_path.write_text(plasma_layout.render_activities(tokens), encoding="utf-8")
     written_paths.append(kactivitymanagerdrc_path)
+
+    # C++ token header: mode-independent (no light/dark variant, see
+    # cpp_header's own module docstring), so it is rendered and written once,
+    # like the three layout files above, to its own "cpp" subdirectory. This is
+    # what lets packages/kuura-frost's real material shader (src/frost.cpp)
+    # read design/tokens.json's material.* values as compiled constexpr C++
+    # constants instead of a second, hand-copied (and driftable) set of
+    # literals - see cpp_header.py's own module docstring for the full "why".
+    cpp_subdir = out_dir / "cpp"
+    cpp_subdir.mkdir(parents=True, exist_ok=True)
+
+    tokens_header_path = cpp_subdir / "tokens.h"
+    tokens_header_path.write_text(cpp_header.render(tokens), encoding="utf-8")
+    written_paths.append(tokens_header_path)
 
     # Return sorted paths
     return sorted(written_paths)
