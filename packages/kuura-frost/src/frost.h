@@ -56,14 +56,44 @@ namespace Kuura
  * older or different KWin version's API, since this API has changed across
  * KWin versions historically.
  *
- * WHICH surfaces Frost applies to (Plasma's own panels/popups/KRunner, not
- * arbitrary application windows) is NOT YET DECIDED IN CODE -- the real
- * mechanism KWin uses to know a surface wants background-blur treatment at
- * all (the blur-behind region hint, X11 property / Wayland protocol) needs
- * its own live investigation before Frost::apply() can correctly decide
- * which windows to touch; this header intentionally does not guess that
- * surface-selection logic yet. See the project's own memory / V4 investigation
- * notes for the current state of that open question.
+ * WHICH surfaces Frost applies to: REUSES the exact mechanism KWin's own
+ * Blur effect already uses to answer the same question -- confirmed by
+ * reading blur.cpp at the pinned tag, not guessed. A window requests
+ * background-blur treatment via, in order of surface type: a Wayland
+ * surface's own `SurfaceInterface::blurRegion()` (set through the compositor
+ * protocol Plasma's shell already uses for every blurred panel/popup/
+ * KRunner popup today -- this is the SAME region already driving the plain
+ * blur those surfaces get out of the box), an X11 window property
+ * (`_KDE_NET_WM_BLUR_BEHIND_REGION`), an internal Qt window's own
+ * "kwin_blur" dynamic property, or the active decoration's
+ * `decorationBlurRegion()`. Blur detects this in `slotWindowAdded()` (a
+ * slot connected to `EffectsHandler::windowAdded`), calling
+ * `updateBlurRegion(EffectWindow*)`, and re-detects it at runtime via
+ * `SurfaceInterface::blurChanged`, a `QEvent::DynamicPropertyChange` filter
+ * for "kwin_blur", and `KDecoration3::Decoration::blurRegionChanged`. Frost
+ * follows the identical pattern: a non-empty blur region for a window is
+ * exactly the "this window wants the glass material" signal, both at
+ * creation and if it changes later -- there is no separate, Frost-specific
+ * hint to invent.
+ *
+ * STILL OPEN, needs a live guest-image test before the blur shader itself is
+ * written (do not assume either answer): KWin's effect chain is ordered
+ * (`Effect::requestedEffectChainPosition()`, 0-100, low = earlier) and
+ * effects call the next one in the chain from within their own paint method
+ * -- confirmed from effect.h's own documentation. What is NOT confirmed by
+ * that documentation is whether Blur's own BackgroundEffectItem-based
+ * rendering (a scene item, not an OffscreenEffect redirect) ends up already
+ * present in the texture OffscreenEffect::redirect() captures for the SAME
+ * window, if Frost's chain position runs after Blur's. If it does, Frost's
+ * own shader only needs to add refraction/specular/noise on top of an
+ * already-blurred background (a materially smaller shader than
+ * reimplementing dual-Kawase) and can rely on the stock Blur effect staying
+ * enabled underneath it; if it does not, Frost needs its own blur pass
+ * adapted from blur/shaders/{downsample,upsample}.frag as the class
+ * docstring above already anticipated. Resolve this empirically (a minimal
+ * build that tints or logs what it actually receives, screenshotted via
+ * harness/spike/boot_capture.sh against a real blurred panel) before
+ * committing to either shader design.
  */
 class Frost : public KWin::OffscreenEffect
 {
@@ -107,6 +137,38 @@ protected:
     void apply(KWin::EffectWindow *window, int mask, KWin::WindowPaintData &data, KWin::WindowQuadList &quads) override;
 
 private:
+    /**
+     * Decides whether one window currently wants the glass material, by the
+     * same rule KWin's own Blur effect uses (see the class docstring): a
+     * non-empty blur region from any of its sources (Wayland surface, X11
+     * property, internal Qt property, decoration). Calls redirect(window) if
+     * so and the window is not already redirected, or unredirect(window) if
+     * a previously-qualifying window no longer has one -- mirrors
+     * BlurEffect::updateBlurRegion()'s role, not its exact implementation
+     * (Frost does not store the region's geometry itself; only whether one
+     * exists governs whether this window is redirected at all).
+     *
+     * @param window the window whose blur-region state to (re-)check
+     */
+    void updateWindowState(KWin::EffectWindow *window);
+
+    /**
+     * Connected to EffectsHandler::windowAdded (constructor) to call
+     * updateWindowState() for every new window, mirroring
+     * BlurEffect::slotWindowAdded()'s role. A window's INITIAL blur-region
+     * state is only known once it is mapped, not from window-addition alone
+     * -- verify live (see the class docstring's still-open question) exactly
+     * which additional per-window signal(s) (Wayland surface blurChanged,
+     * the internal-window dynamic-property filter, or the decoration's
+     * blurRegionChanged) this constructor must also connect, matching
+     * BlurEffect's own set, so a window that requests blur AFTER being added
+     * is not missed.
+     *
+     * @param window the newly added window
+     */
+    void slotWindowAdded(KWin::EffectWindow *window);
+
+
     /**
      * Compiles/links the fragment+vertex shader pair via
      * KWin::ShaderManager::instance()->loadShaderFromCode(...) and stores the
