@@ -12,6 +12,9 @@ without changing signatures, the exception class or the rules listed here.
 Rules (path -> constraint). "number" means int or float but never bool.
 - radius.window|panel|menu|card|button|field|tooltip: int 0..64
 - radius.icon: non-empty str
+- icon.squircle_exponent: int 2..12
+- icon.gradient.top|bottom: hex colour (#RRGGBB or #RRGGBBAA)
+- icon.glass_edge.opacity: 0..1; .width: 0..8
 - material.blur_radius: number 0..200; material.noise: number 0..1
 - material.bg_opacity.panel|menu|sidebar|modal: number 0..1
 - material.edge_highlight.opacity: 0..1; .width: 0..8
@@ -53,6 +56,8 @@ _RULES = {
     "radius.menu": ("int", 0, 64), "radius.card": ("int", 0, 64),
     "radius.button": ("int", 0, 64), "radius.field": ("int", 0, 64),
     "radius.tooltip": ("int", 0, 64), "radius.icon": ("str",),
+    "icon.squircle_exponent": ("int", 2, 12),
+    "icon.glass_edge.opacity": ("number", 0, 1), "icon.glass_edge.width": ("number", 0, 8),
     "material.blur_radius": ("number", 0, 200), "material.noise": ("number", 0, 1),
     "material.bg_opacity.panel": ("number", 0, 1), "material.bg_opacity.menu": ("number", 0, 1),
     "material.bg_opacity.sidebar": ("number", 0, 1), "material.bg_opacity.modal": ("number", 0, 1),
@@ -72,10 +77,13 @@ _RULES = {
     "motion.easing_spring.stiffness": ("positive",), "motion.easing_spring.damping": ("positive",),
     "panel.menubar_height": ("int", 16, 64), "panel.shelf_icon": ("int", 16, 128),
     "panel.shelf_margin": ("int", 0, 64), "panel.shelf_hover_scale": ("number", 1.0, 2.5),
+    "icon.gradient.top": ("hex_color",), "icon.gradient.bottom": ("hex_color",),
 }
 
 # WHY: Nested dicts: path -> set of expected keys
 _NESTED = {
+    "icon.gradient": {"top", "bottom"},
+    "icon.glass_edge": {"opacity", "width"},
     "material.bg_opacity": {"panel", "menu", "sidebar", "modal"},
     "material.edge_highlight": {"opacity", "width"},
     "material.inner_shadow": {"opacity", "blur"},
@@ -103,6 +111,7 @@ _ORDERING = {
 
 _SECTIONS = {
     "radius": {"window", "panel", "menu", "card", "button", "field", "tooltip", "icon"},
+    "icon": {"squircle_exponent", "gradient", "glass_edge"},
     "material": {"blur_radius", "noise", "bg_opacity", "edge_highlight", "inner_shadow", "refraction"},
     "spacing": {"grid", "gutter", "section"},
     "type": {"family_ui", "family_mono", "size", "weight", "tracking"},
@@ -202,7 +211,7 @@ def validate(tokens: dict) -> list[str]:
         return ["tokens must be a dictionary"]
 
     # Validate non-color sections
-    for section in ["radius", "material", "spacing", "type", "motion", "panel"]:
+    for section in ["radius", "icon", "material", "spacing", "type", "motion", "panel"]:
         if section not in tokens:
             errors.append(f"{section}: missing or not a dict")
             continue
