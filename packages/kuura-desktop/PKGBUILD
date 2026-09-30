@@ -35,6 +35,16 @@ depends=(
     # Applications
     'dolphin'
     'konsole'
+    # Browser: Firefox with a preinstalled, token-themed profile and about:config
+    # defaults (Vaihe 6, a package of this monorepo) - built from the same
+    # DISTRO_NAME variable as this package's own name. Note for future packages
+    # of this monorepo: kuura-firefox's own depends already lists pipewire-jack
+    # first for the same jack-provider-ordering reason this array's own leading
+    # entry does (see packages/kuura-firefox/PKGBUILD's own comment for the real,
+    # reproduced conflict this defends against) - any FUTURE local package whose
+    # own dependency tree can also reach a "jack" virtual dependency needs the
+    # same defensive entry, this is not automatically inherited from here.
+    "${DISTRO_NAME}-firefox"
     # Theme engine
     'kvantum'
     # Cursor theme - a macOS-inspired variant of KDE Breeze cursors (the default

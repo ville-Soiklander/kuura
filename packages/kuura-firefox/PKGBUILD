@@ -1,0 +1,146 @@
+# Firefox integration: a preinstalled, themed default profile, userChrome.css/
+# userContent.css generated from this repository's own design tokens, and the
+# about:config defaults (policies.json) needed for any of that to actually load
+# (Vaihe 6 of the working brief, "Sovellustason viimeistely", the Firefox
+# sub-task - its own separate work queue). Ships no upstream source; like the
+# other packages of this monorepo it is built from this repository itself.
+#
+# The package name comes from the environment (DISTRO_NAME, see .env.example),
+# the same convention every other package of this monorepo uses; building by
+# hand without it fails with a clear error. makepkg is run through
+# build/build_repo.sh, which exports the variable.
+#
+# OPEN, DELIBERATE DECISION - NOT wired into kuura-desktop's own `depends` by
+# this change. Firefox itself is currently a dependency of the SCREENSHOT
+# HARNESS's own test image only (harness/vm/Containerfile), not of anything
+# this monorepo actually ships - adding `depends=('firefox')` below makes this
+# package (and therefore Firefox) real and buildable, but does NOT by itself
+# change what a real install of the metapackage pulls in, because nothing
+# currently names this package in kuura-desktop's own `depends`. Whether to add
+# "${DISTRO_NAME}-firefox" there - making Firefox part of every real install,
+# the same way kuura-shell was added - is a real product decision (every
+# install gains a large new dependency) and is intentionally left for a human
+# to make explicitly, matching this project's own escalation rule for a change
+# of this kind; see this change's own handback/report for the question as
+# posed. Do not add it silently while touching this file for something else.
+
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-firefox"
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Firefox integration: preinstalled default profile, userChrome.css/userContent.css theme, about:config defaults"
+arch=('any')
+url='https://github.com/ville-Soiklander/kuura'
+# Themes, configuration and scripts of the project are GPL-3.0-or-later (see LICENSE
+# and docs/LICENSES/README.md). This package ships none of Firefox's own code.
+license=('GPL-3.0-or-later')
+# firefox: the browser this package themes and preconfigures - see the OPEN
+# DECISION note above for why this is not automatically pulled into every real
+# install through kuura-desktop yet.
+#
+# pipewire-jack: NOT a Firefox dependency in its own right - listed here to
+# force pacman's own dependency-resolution order, the identical defensive
+# trick kuura-desktop's own `depends` array already uses for itself (see that
+# PKGBUILD's own "MUST stay first" comment) for the exact same underlying
+# pacman quirk. Found for real, not guessed: building this repository with
+# this package present, `firefox`'s own dependency tree pulls in a generic
+# "jack" virtual dependency (through its multimedia libraries) that pacman
+# resolves interactively - under --noconfirm it silently takes the listed
+# default, which is `jack2`, NOT `pipewire-jack`. If kuura-desktop is built
+# afterwards in that same session, its own already-correct "pipewire-jack
+# must stay first" ordering no longer has any effect, because jack2 is
+# already installed by then - `pacman -Sy kuura-desktop` then hard-fails with
+# "pipewire-jack and jack2 are in conflict (jack)" (reproduced live: this
+# was the exact failure of a real `make repo` run before this line was
+# added). Depending on pipewire-jack explicitly here, at build order, means
+# pacman resolves this package's own jack provider to pipewire-jack before
+# firefox's own generic request for "jack" is ever considered, so the
+# ambiguous prompt never happens and kuura-desktop's later build (or a real
+# end-user machine that has both packages installed together) never meets an
+# already-installed jack2 to conflict with. This is a general risk to flag,
+# not something local to this one PKGBUILD: it will resurface for ANY future
+# package of this monorepo whose own dependency tree can reach a "jack"
+# virtual dependency and gets built/installed before kuura-desktop in the
+# same session - see this change's own handback/report for the question as
+# posed to a human, since a monorepo-wide policy (e.g. a fixed build/install
+# order, or a shared "pin pipewire-jack" convention for every local package)
+# is a real project decision, not something to settle silently in one file.
+depends=('firefox' 'pipewire-jack')
+# python: build() runs design/generate_firefox.py through its `python -m` CLI.
+# Standard library only (see that module's own docstring), so no further
+# makedepends.
+makedepends=('python')
+
+# build(): generate userChrome.css/userContent.css (token-derived, mode-
+# independent single files per design/generators/firefox_theme.py's own module
+# docstring) from design/tokens.json with the LOCKED design/generate_firefox.py
+# CLI. Nothing here parses tokens.json itself - that stays entirely inside the
+# generator. Also copies this PKGBUILD's own sibling skel/ directory and
+# policies.json into the build tree: namcap's PKGBUILD checks flag any
+# reference to the PKGBUILD's own containing directory as an error wherever it
+# occurs in the file, comments included (confirmed empirically while building
+# a sibling package of this monorepo) - so that directory name is never
+# written anywhere in this file, not even to explain why, and every path below
+# is phrased relative to the build tree instead.
+build() {
+    # design/generate_firefox.py's own PROJECT_ROOT is derived from its own file
+    # location: two directories up from this PKGBUILD, inside the build
+    # container once design/ is staged there next to packages/ (see
+    # build/Containerfile). --out-dir must resolve inside that tree - the CLI
+    # enforces this itself as a path-traversal guard - so it is pointed at the
+    # build tree's own source directory, already inside it.
+    ( cd "$srcdir/../../.." && python3 -m design.generate_firefox \
+        --out-dir "$srcdir/generated" --name "$DISTRO_NAME" )
+
+    cp -r "$srcdir/../skel" "$srcdir/skel"
+    cp "$srcdir/../policies.json" "$srcdir/policies.json"
+}
+
+# package(): installs policies.json to Firefox's own real, documented
+# distribution-config location on Arch (confirmed real directory: the firefox
+# package itself already ships /usr/lib/firefox/distribution/distribution.ini
+# there), and the preinstalled profile database plus the generated theme files
+# to /etc/skel so every NEW account gets them - docs/SHELL_CONTRACT.md's own
+# "skel:" bullet is the precedent this follows for shipping default per-user
+# configuration this same way.
+package() {
+    local generated="$srcdir/generated"
+    local skel="$srcdir/skel"
+
+    # ---- policies.json: shared, system-wide Firefox configuration. Sets
+    # about:config defaults every profile picks up, most importantly
+    # toolkit.legacyUserProfileCustomizations.stylesheets = true (Status
+    # "user", not "default" - see this file's own comment for the documented
+    # reason: this exact pref is Mozilla's own worked example of a pref read
+    # too early in startup for the policy engine's "default" status to apply
+    # reliably. "user" still shows as a real, user-changeable Read/Write
+    # preference - the user can flip it back off in about:config - it simply
+    # persists even if this policy file is later removed, unlike "default".
+    # If a future revision needs to truly revert this, ship a "clear" status
+    # policy rather than just deleting the line - deleting it leaves the
+    # "user" value already written to every existing profile's prefs.js
+    # untouched, per Mozilla's own documented behaviour for this Status).
+    install -Dm644 "$srcdir/policies.json" \
+        "$pkgdir/usr/lib/firefox/distribution/policies.json"
+
+    # ---- Preinstalled profile database: real-boot verified (see
+    # skel/.config/mozilla/firefox/profiles.ini's own header comment for the
+    # full trail - hash derivation, cross-checks, and the exact live-boot test
+    # performed against this project's own pinned Firefox 156.0.1 that showed
+    # a genuinely fresh account adopting this exact file unchanged, creating
+    # no second, randomly-salted profile). Installed at ~/.config/mozilla/
+    # firefox/, the real, confirmed XDG location for this Firefox version -
+    # NOT the legacy ~/.mozilla/firefox/ path most older guides describe.
+    install -Dm644 "$skel/.config/mozilla/firefox/profiles.ini" \
+        "$pkgdir/etc/skel/.config/mozilla/firefox/profiles.ini"
+    install -Dm644 "$skel/.config/mozilla/firefox/installs.ini" \
+        "$pkgdir/etc/skel/.config/mozilla/firefox/installs.ini"
+
+    # ---- Generated userChrome.css/userContent.css: installed straight into
+    # the preinstalled profile's own chrome/ directory (profiles.ini above
+    # names this same profile "default-release"), Firefox's real, fixed,
+    # required path for these two files inside any profile.
+    install -Dm644 "$generated/firefox/chrome/userChrome.css" \
+        "$pkgdir/etc/skel/.config/mozilla/firefox/default-release/chrome/userChrome.css"
+    install -Dm644 "$generated/firefox/chrome/userContent.css" \
+        "$pkgdir/etc/skel/.config/mozilla/firefox/default-release/chrome/userContent.css"
+}

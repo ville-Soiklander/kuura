@@ -1,0 +1,13 @@
+{
+  "policies": {
+    "Preferences": {
+      "toolkit.legacyUserProfileCustomizations.stylesheets": {
+        "Value": true,
+        "Status": "user"
+      }
+    },
+    "DontCheckDefaultBrowser": true,
+    "DisableAppUpdate": true,
+    "OverrideFirstRunPage": ""
+  }
+}
