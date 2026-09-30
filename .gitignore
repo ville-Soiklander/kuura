@@ -27,5 +27,15 @@ scripts/
 # C++ package build directories (packages/*/build/, e.g. packages/kuura-frost/)
 packages/*/build/
 
+# Package-build-time generated headers (e.g. packages/kuura-frost/generated/cpp/tokens.h,
+# written by design/generate.py from design/tokens.json -- not checked in, see that
+# package's own PKGBUILD/CMakeLists.txt for how it is produced before the real build)
+packages/*/generated/
+
+# Reference material and throwaway verification scripts fetched/written during
+# investigation (e.g. KWin source citations, ad-hoc rebuild/test scripts) -- never
+# part of the shipped project
+.scratch/
+
 # Editor-local settings (e.g. CMake Tools writes an absolute local path here)
 .vscode/

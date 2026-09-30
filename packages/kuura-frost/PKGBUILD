@@ -6,10 +6,12 @@
 # below necessary -- nothing here is a guessed toolchain list).
 #
 # src/frost.h is the locked interface/contract for the effect; src/frost.cpp
-# currently implements only the window-targeting logic (matching Blur's own
-# blur-region detection) and a throwaway diagnostic tint shader used to answer
-# the class docstring's chain-position question empirically -- not the
-# finished refraction/specular/noise material shader, which is later work.
+# implements it in full, including the real refraction/specular-highlight/
+# dither-noise material shader (src/frost_shader.h) -- see frost.h's own
+# apply() docstring for the locked mathematical specification this
+# implements, and packages/kuura-frost/tests/offscreen_shader_test.cpp for
+# the headless correctness test that verifies it against hand-computed
+# per-pixel values.
 #
 # The package name comes from the environment (DISTRO_NAME, see .env.example),
 # the same convention as kuura-desktop/kuura-shell; building by hand without it
@@ -51,16 +53,42 @@ depends=('kwin')
 #   vulkan-headers         KWin::kwin's own exported target pulls in Vulkan
 #                          headers transitively (confirmed by a real build
 #                          failure before this was added)
-makedepends=('extra-cmake-modules' 'cmake' 'ninja' 'qt6-base' 'kwin' 'kcoreaddons' 'vulkan-headers')
+# python: build() now also runs design/generate.py through its `python -m`
+# CLI (Vaihe 4's real material shader reads design/tokens.json's material.*
+# values as generated constexpr C++ constants, see
+# design/generators/cpp_header.py -- frost.h's own class docstring forbids
+# hand-copying those numbers as shader-source/C++ literals instead). Standard
+# library only on the design.generate side (see that module's own docstring),
+# so no further makedepends beyond the interpreter itself -- the same
+# reasoning packages/kuura-shell/PKGBUILD's own makedepends comment already
+# gives for its identical 'python' entry.
+# NOTE on kdecoration (KDecoration3 headers, CMakeLists.txt's own
+# find_package(KDecoration3)): NOT listed separately here -- confirmed live
+# (`pacman -Qi kwin`) that the pinned kwin package's own "Depends On" list
+# already includes kdecoration directly, so makepkg's --syncdeps installs it
+# transitively via the 'kwin' entry below; adding it again explicitly would
+# only duplicate an already-guaranteed dependency, not fix a real gap.
+makedepends=('extra-cmake-modules' 'cmake' 'ninja' 'qt6-base' 'kwin' 'kcoreaddons' 'vulkan-headers' 'python')
 
-# build(): configures and builds the CMake project in place. Unlike
-# kuura-shell (no source= array either, but its build() reaches OUT to
-# design/generate.py two directories above this PKGBUILD), kuura-frost's own
-# CMakeLists.txt and src/ already sit directly next to this PKGBUILD -- one
-# level below $srcdir (makepkg's own auto-created build directory, empty here
-# since there is no source= to extract into it), so `cd "$srcdir/.."` reaches
-# them, the same relative-navigation idiom kuura-shell's build() already uses.
+# build(): generates the real material.* C++ header from design/tokens.json,
+# THEN configures and builds the CMake project in place. The design.generate
+# invocation below copies packages/kuura-shell/PKGBUILD's own build() step in
+# form (same PROJECT_ROOT-via-three-"..".-from-$srcdir navigation, since this
+# PKGBUILD sits at the exact same depth, packages/<name>/PKGBUILD) -- only the
+# --out-dir target differs: "$srcdir/../generated" (a sibling of the checked-in
+# src/ directory, i.e. packages/kuura-frost/generated/), matching the fixed,
+# conventional location CMakeLists.txt's own target_include_directories() call
+# now reads <tokens.h> from (${CMAKE_CURRENT_SOURCE_DIR}/generated/cpp --
+# CMAKE_CURRENT_SOURCE_DIR being "$srcdir/.." here, so "generated/cpp" under it
+# is exactly "$srcdir/../generated/cpp"). kuura-frost's own CMakeLists.txt and
+# src/ already sit directly next to this PKGBUILD -- one level below $srcdir
+# (makepkg's own auto-created build directory, empty here since there is no
+# source= to extract into it), so `cd "$srcdir/.."` reaches them, the same
+# relative-navigation idiom kuura-shell's build() already uses.
 build() {
+    ( cd "$srcdir/../../.." && python3 -m design.generate \
+        --out-dir "$srcdir/../generated" --name "$DISTRO_NAME" )
+
     ( cd "$srcdir/.." && cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr \
         && cmake --build build )
 }

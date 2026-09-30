@@ -1,12 +1,30 @@
 #include "frost.h"
+#include "frost_shader.h"
 
-// Confirmed live at /usr/include/kwin/opengl/glshadermanager.h and
-// /usr/include/kwin/opengl/glshader.h against the pinned Arch snapshot's kwin
-// package (V4 investigation notes).
+// Confirmed live at /usr/include/kwin/opengl/glshadermanager.h,
+// /usr/include/kwin/opengl/glshader.h and /usr/include/kwin/opengl/gltexture.h
+// against the pinned Arch snapshot's kwin package (V4 investigation notes).
+// gltexture.h itself #includes <epoxy/gl.h> (confirmed by reading it directly),
+// which is where apply()'s own glActiveTexture()/GL_TEXTURE0/GL_TEXTURE1 calls
+// come from -- no separate raw-GL include is needed.
 #include <opengl/glshader.h>
 #include <opengl/glshadermanager.h>
+#include <opengl/gltexture.h>
 #include <effect/effecthandler.h>
 #include <effect/effectwindow.h>
+
+// The generated tokens.h below is a package-build-time artifact (see
+// design/generators/cpp_header.py and packages/kuura-frost/PKGBUILD's build()),
+// not a checked-in source file -- packages/kuura-frost/CMakeLists.txt adds its
+// real, generated location (<package dir>/generated/cpp/) to this target's
+// include path. This is the ONE place design/tokens.json's material.* numbers
+// reach this file; nothing below hand-copies a tokens.json value as a literal
+// (frost.h's own class docstring explicitly forbids that).
+#include <tokens.h>
+
+#include <QImage>
+#include <QRandomGenerator>
+#include <QVector2D>
 
 // Confirmed live at /usr/include/kwin/wayland/surface.h -- KWin's OWN,
 // internally-namespaced Wayland server implementation (KWin::SurfaceInterface),
@@ -106,60 +124,24 @@ int Frost::requestedEffectChainPosition() const
 
 void Frost::loadShaders()
 {
-    // DIAGNOSTIC ONLY -- see the commit/PR that introduces Frost's real
-    // material shader (refraction/specular-highlight/noise, per frost.h's
-    // class docstring) for the finished replacement. This exists solely to
-    // answer the class docstring's "STILL OPEN" chain-position question
-    // empirically, per the working brief: it blends whatever texture Frost's
-    // OffscreenEffect base class actually captures toward solid red at 50%
-    // strength, so a live guest screenshot shows unambiguously whether Blur's
-    // blurred backdrop is already present in it (blurred-and-red = yes) or
-    // not (sharp-and-red = no).
+    // THE REAL MATERIAL SHADER -- replaces the former DIAGNOSTIC ONLY 50% red
+    // tint (which already answered the class docstring's chain-position
+    // question; see frost.h's git history / the V4 investigation notes for
+    // that shader and what it proved). frost_shader.h's own header comment
+    // documents every uniform this shader declares and where its real value
+    // comes from; frost.h's apply() docstring documents the math itself and
+    // the (source-cited) decisions this method's own body below depends on
+    // (why windowSize needs no uniform here, why the noise texture is Frost's
+    // own, why these material.* uniforms are set ONCE here rather than every
+    // frame in apply()).
     //
-    // Traits requested: MapTexture (sample the redirected texture) and
-    // Modulate (so OffscreenData::paint()'s own opacity/brightness handling --
-    // which unconditionally calls
-    // setUniform(GLShader::Vec4Uniform::ModulationConstant, ...) regardless of
-    // which shader is bound, confirmed at opengl/offscreeneffect.cpp -- still
-    // has a real `modulation` uniform to write into). Deliberately WITHOUT
-    // AdjustSaturation/TransformColorspace: the real shader will eventually
-    // want both, but they pull in saturation.glsl/colormanagement.glsl
-    // #include complexity this throwaway tint does not need. Skipping them is
-    // safe, not just convenient: GLShader::setUniform() silently no-ops for a
-    // uniform this fragment source does not declare -- confirmed at
-    // opengl/glshader.cpp's own setUniform(int location, ...) overloads,
-    // every one of which guards its glUniform*() call with `if (location >=
-    // 0)`, and resolveLocations() stores -1 for a name glGetUniformLocation()
-    // does not find in the linked program.
-    //
-    // The vertex shader argument is left empty so ShaderManager generates the
-    // correct one for these same traits (opengl/base.vert at the pinned tag:
-    // declares `in vec4 position`/`texcoord`, `out vec2 texcoord0`, `uniform
-    // mat4 modelViewProjectionMatrix`) -- only the fragment stage is custom.
-    // `#version 140` is first, matching opengl/base.frag's own convention,
-    // because ShaderManager::generateCustomShader() prepends its `#define
-    // TRAIT_...` lines to whatever source it is given (confirmed at
-    // opengl/glshadermanager.cpp's generateCustomShader()) -- ahead of
-    // `#version` even for KWin's OWN generated shaders, so this already-
-    // shipping, already-working ordering is reused rather than "fixed".
-    static const QByteArray fragmentSource = QByteArrayLiteral(
-        "#version 140\n"
-        "uniform sampler2D sampler;\n"
-        "in vec2 texcoord0;\n"
-        "uniform vec4 modulation;\n"
-        "out vec4 fragColor;\n"
-        "void main(void)\n"
-        "{\n"
-        "    vec4 sampled = texture(sampler, texcoord0);\n"
-        "    // DIAGNOSTIC ONLY: 50%% blend toward solid red, alpha preserved\n"
-        "    // so a translucent panel/popup still shows through to whatever\n"
-        "    // is behind it -- that visibility is the whole point of the test.\n"
-        "    vec3 tinted = mix(sampled.rgb, vec3(1.0, 0.0, 0.0), 0.5);\n"
-        "    fragColor = vec4(tinted, sampled.a) * modulation;\n"
-        "}\n");
-
+    // Traits (MapTexture | Modulate) and the empty vertex-source argument
+    // (ShaderManager generates the real one for these traits, confirmed at
+    // src/opengl/base.vert, fetched at the pinned tag) are unchanged from the
+    // former diagnostic shader -- only the fragment source itself changed.
     std::unique_ptr<KWin::GLShader> shader = KWin::ShaderManager::instance()->generateCustomShader(
-        KWin::ShaderTrait::MapTexture | KWin::ShaderTrait::Modulate, QByteArray(), fragmentSource);
+        KWin::ShaderTrait::MapTexture | KWin::ShaderTrait::Modulate, QByteArray(),
+        QByteArray(Kuura::kFrostFragmentShaderSource));
     if (!shader) {
         // Mirrors this method's own original placeholder contract: leave
         // m_shader null (safe-disabled) rather than pretend a broken shader
@@ -167,7 +149,106 @@ void Frost::loadShaders()
         // before binding anything to a window.
         return;
     }
+
+    // The noise texture must exist before the noiseSampler uniform below is
+    // fixed to a texture unit -- see generateNoiseTexture()'s own docstring in
+    // frost.h for why this is a one-time, not per-frame, upload.
+    if (!generateNoiseTexture()) {
+        return;
+    }
+
+    // Upload the five material.* constants (design/tokens.json, via the
+    // package-build-time generated <tokens.h>, see this file's own top-of-file
+    // include comment) and fix both sampler uniforms to their real texture
+    // units, ONCE, right after linking. See frost.h's apply() docstring
+    // ("FLAGGED, NOT SILENTLY WORKED AROUND") for the full, cited reasoning on
+    // why this cannot instead happen per-frame in apply(): GLShader::setUniform()
+    // is a bare glUniform*() call (opengl/glshader.cpp), which OpenGL applies to
+    // whichever program is CURRENTLY BOUND -- pushShader()/popShader() (the same
+    // idiom plugins/blur/blur.cpp uses for its own custom shaders' uniforms)
+    // makes that true for exactly the duration of these calls, and these five
+    // values never change at runtime, so doing this once is strictly correct
+    // AND cheaper than repeating it on every composited frame.
+    KWin::ShaderManager::instance()->pushShader(shader.get());
+    shader->setUniform("sampler", 0);
+    shader->setUniform("noiseSampler", 1);
+    // WHY the explicit static_cast<float>: material.refraction.edge_falloff is
+    // a JSON INTEGER in design/tokens.json (12, not 12.0), so
+    // design/generators/cpp_header.py -- correctly, since it preserves the
+    // source JSON's own type rather than guessing an intended one -- generates
+    // `kMaterialRefractionEdgeFalloff` as a C++ `int`. The shader declares
+    // `refractionEdgeFalloff` as `float` (frost_shader.h). Passing the raw int
+    // here would resolve to GLShader::setUniform(const char *, int), which
+    // calls glUniform1i() -- a real OpenGL type mismatch against a `float`
+    // uniform (GL_INVALID_OPERATION, value left unset) -- confirmed by reading
+    // every setUniform() overload in opengl/glshader.cpp, not assumed.
+    shader->setUniform("refractionStrength", Kuura::Tokens::kMaterialRefractionStrength);
+    shader->setUniform("refractionEdgeFalloff", static_cast<float>(Kuura::Tokens::kMaterialRefractionEdgeFalloff));
+    shader->setUniform("edgeHighlightWidth", Kuura::Tokens::kMaterialEdgeHighlightWidth);
+    shader->setUniform("edgeHighlightOpacity", Kuura::Tokens::kMaterialEdgeHighlightOpacity);
+    shader->setUniform("noiseAmount", Kuura::Tokens::kMaterialNoise);
+    // WHY the explicit static_cast<float>: GLTexture::width()/height() return
+    // `int` (opengl/gltexture.h) -- an implicit int-to-float argument here
+    // would trip cppcoreguidelines-narrowing-conversions (enabled in this
+    // project's .clang-tidy), even though no real precision loss can occur
+    // for a texture this small.
+    shader->setUniform("noiseTextureSize",
+                        QVector2D(static_cast<float>(m_noiseTexture->width()), static_cast<float>(m_noiseTexture->height())));
+    KWin::ShaderManager::instance()->popShader();
+
     m_shader = std::move(shader);
+}
+
+bool Frost::generateNoiseTexture()
+{
+    // Mirrors the TECHNIQUE `BlurEffect::ensureNoiseTexture()` uses
+    // (plugins/blur/blur.cpp at the pinned tag) -- a tiled grayscale image,
+    // GL_NEAREST + GL_REPEAT -- NOT a reference to Blur's own texture object,
+    // which is a private member of a different effect instance and cannot be
+    // shared (see frost.h's apply() docstring for the full citation). 256x256
+    // matches Blur's own real, shipping noise texture's base size; there is no
+    // design token for a dither-tile size (an implementation detail of the
+    // technique, not a value a theme would tune).
+    constexpr int kNoiseTextureSize = 256;
+    QImage noiseImage(QSize(kNoiseTextureSize, kNoiseTextureSize), QImage::Format_Grayscale8);
+
+    // WHY QRandomGenerator rather than literally mirroring BlurEffect's own
+    // std::rand()/std::srand() call: apply()'s docstring asks this method to
+    // reuse the noise TECHNIQUE (tiled grayscale image, GL_NEAREST + GL_REPEAT),
+    // not its exact RNG source. QRandomGenerator::global() is already seeded,
+    // thread-safe, and has none of std::rand()/std::srand()'s global-mutable-
+    // state re-entrancy concerns -- a strictly better choice for newly written
+    // code generating a one-shot, non-cryptographic dither pattern.
+    for (int y = 0; y < noiseImage.height(); ++y) {
+        // QImage::scanLine() is Qt's own real API for direct pixel access; it
+        // returns a raw uchar* by design, with no bounds-checked alternative in
+        // QImage itself. A std::span wrapper was tried and rejected: span's own
+        // operator[] then trips cppcoreguidelines-pro-bounds-avoid-unchecked-
+        // container-access instead (span has no .at()-style checked accessor in
+        // the current standard), so it only trades one warning for another
+        // without removing any real risk -- the loop bound below (`x <
+        // noiseImage.width()`) is the exact same extent scanLine()'s own buffer
+        // is guaranteed to hold, by QImage's own contract.
+        uchar *line = noiseImage.scanLine(y);
+        for (int x = 0; x < noiseImage.width(); ++x) {
+            line[x] = static_cast<uchar>(QRandomGenerator::global()->bounded(256)); // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        }
+    }
+
+    std::unique_ptr<KWin::GLTexture> texture = KWin::GLTexture::upload(noiseImage);
+    if (!texture) {
+        return false;
+    }
+    // GL_NEAREST: dither noise must stay per-texel random, never smoothed by
+    // linear filtering (which would visibly blur/average the pattern away).
+    // GL_REPEAT: the shader tiles this texture across the whole window via
+    // gl_FragCoord (unbounded screen-space coordinates), matching
+    // blur/shaders/noise.frag's own real sampling convention (frost_shader.h).
+    texture->setFilter(GL_NEAREST);
+    texture->setWrapMode(GL_REPEAT);
+
+    m_noiseTexture = std::move(texture);
+    return true;
 }
 
 void Frost::slotWindowAdded(KWin::EffectWindow *window)
@@ -328,21 +409,50 @@ void Frost::updateWindowState(KWin::EffectWindow *window)
 
 void Frost::apply(KWin::EffectWindow *window, int mask, KWin::WindowPaintData &data, KWin::WindowQuadList &quads)
 {
-    if (!m_shader) {
-        return;
-    }
-    // PLACEHOLDER: the real refraction UV-offset and specular-highlight
-    // geometry/paint-data changes are not yet implemented (see frost.h's
-    // class docstring for the real, confirmed apply() contract this must
-    // eventually satisfy) -- this bounded change only needed to prove the
-    // chain-position/texture-capture question, which the DIAGNOSTIC ONLY tint
-    // shader bound in loadShaders()/updateWindowState() already answers by
-    // itself, with no geometry or paint-data change required. Left as a safe
-    // no-op rather than guessed at.
     Q_UNUSED(window)
     Q_UNUSED(mask)
     Q_UNUSED(data)
     Q_UNUSED(quads)
+
+    if (!m_shader || !m_noiseTexture) {
+        return;
+    }
+
+    // `data`/`quads` are deliberately left untouched: the refraction offset and
+    // specular highlight are pure per-pixel fragment-shader math
+    // (frost_shader.h), not a geometry or paint-data change -- this is the
+    // now-determined answer to frost.h's own apply() docstring question
+    // ("unmodified unless the refraction offset needs to be expressed as a
+    // geometry change... to be determined empirically against the real API").
+    //
+    // The ONLY real per-frame work left for apply(): rebind Frost's OWN noise
+    // texture to texture unit 1 before OffscreenData::paint() (base class,
+    // called right after this method returns -- offscreeneffect.cpp's
+    // OffscreenEffect::drawWindow(): `apply(...); maybeRender(); paint();`)
+    // draws this window with Frost's shader. See frost.h's apply() docstring
+    // ("FLAGGED, NOT SILENTLY WORKED AROUND") for why the UNIFORM VALUES
+    // themselves (including "the noise sampler reads unit 1") are fixed once in
+    // loadShaders() instead of here: this is a GL texture BINDING, not a
+    // uniform value, and glBindTexture() only cares about the currently ACTIVE
+    // unit, not which shader program happens to be bound -- so, unlike
+    // setUniform(), it is safe to call from apply(), before paint()'s own
+    // ShaderBinder binds Frost's shader.
+    //
+    // WHY this is also safe against paint()'s own later `m_texture->bind()`:
+    // GLTexture::bind() (opengl/gltexture.cpp, fetched at the pinned tag) never
+    // calls glActiveTexture() itself -- it only binds to whichever unit is
+    // already active. Restoring unit 0 as active before returning (without
+    // unbinding unit 1's own texture -- "active" only controls which unit the
+    // NEXT bind/parameter call affects) is what keeps that assumption intact:
+    // paint()'s `m_texture->bind()` lands on unit 0 as it always has, while
+    // unit 1 still holds Frost's noise texture for the shader's noiseSampler
+    // uniform (fixed to 1 at link time) to read from. Nothing in the real,
+    // fetched rendering path this window's capture/paint touches (blur.cpp,
+    // glshader.cpp, gltexture.cpp, offscreeneffect.cpp) calls glActiveTexture()
+    // at all, so no other code silently steals unit 1 in between either.
+    glActiveTexture(GL_TEXTURE1);
+    m_noiseTexture->bind();
+    glActiveTexture(GL_TEXTURE0);
 }
 
 } // namespace Kuura

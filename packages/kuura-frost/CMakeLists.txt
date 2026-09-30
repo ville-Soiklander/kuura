@@ -4,11 +4,12 @@
 # brief, docs/SHELL_CONTRACT.md's "material" tokens that Vaihe 3 found no stock
 # KWin/Plasma lever for).
 #
-# THIS FILE IS A BUILD-TOOLCHAIN SKELETON, NOT THE FINISHED EFFECT. It exists so
-# the real compiler/clang-tidy pipeline (scripts/run_static_analysis.ps1) has a
-# genuine, buildable target to verify against before the shader/effect logic
-# itself is written. src/frost.h documents the locked class contract; src/frost.cpp
-# is currently a placeholder implementation, not the real material.
+# src/frost.h documents the locked class contract; src/frost.cpp implements it,
+# including the real material shader (src/frost_shader.h) and the design-token
+# constants it reads from the generated <tokens.h> (see the
+# target_include_directories() call below). The real compiler/clang-tidy
+# pipeline this file was originally built to give a target for
+# (scripts/run_static_analysis.ps1) now also covers that real implementation.
 #
 # find_package(KWin) works directly because the pinned Arch snapshot's kwin
 # package ships its own CMake package config (/usr/lib/cmake/KWin/*.cmake) --
@@ -99,4 +100,66 @@ target_link_libraries(kuura_frost PRIVATE
 
 target_include_directories(kuura_frost PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    # <tokens.h>, generated from design/tokens.json at package-build time by
+    # design/generators/cpp_header.py -- see PKGBUILD's build(), which runs
+    # `python3 -m design.generate --out-dir "$srcdir/../generated" ...` BEFORE
+    # this cmake configure step, matching packages/kuura-shell/PKGBUILD's own
+    # established design.generate invocation pattern. This directory will not
+    # exist yet on a plain `cmake -S .` invocation that skips that step --
+    # frost.cpp's own `#include <tokens.h>` will then fail to find it, which is
+    # the intended, loud failure mode (no silent fallback to hand-copied
+    # literals -- see frost.h's own class docstring for why that is forbidden).
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/cpp"
 )
+
+# ---------------------------------------------------------------------------
+# Offscreen shader-correctness test rig (OFF by default -- see frost.h's
+# apply() docstring, "TESTABLE WITHOUT A REAL KWIN SESSION"). Deliberately a
+# SEPARATE target from kuura_frost itself, not part of the shipped plugin:
+# tests/offscreen_shader_test.cpp links only EGL + desktop OpenGL, needing
+# makedepends (mesa, for its software rasterizer + EGL headers) the real,
+# installed .so this package ships never needs at runtime (it gets its GL
+# context from KWin's own already-running compositor, never creates one
+# itself). Keeping this OFF by default means `packages/kuura-frost/PKGBUILD`'s
+# own `cmake --build build` (no explicit -DKUURA_FROST_BUILD_TESTS=ON) never
+# even attempts to find EGL/mesa -- the real, reproducible package build's own
+# makedepends list stays exactly as narrow as CMakeLists.txt's own existing
+# comments already justify each entry of, one real build failure at a time.
+option(KUURA_FROST_BUILD_TESTS
+    "Build the offscreen shader-correctness test rig (needs EGL + mesa's software GL; not part of the shipped package)"
+    OFF)
+
+if(KUURA_FROST_BUILD_TESTS)
+    # WHY find_library rather than find_package(EGL)/find_package(OpenGL):
+    # CMake ships no FindEGL module at all, and while it does ship FindOpenGL,
+    # that module's own real behaviour (confirmed by reading
+    # Modules/FindOpenGL.cmake at this project's pinned CMake version) prefers
+    # GLVND's libOpenGL.so/libGLX.so split over the classic combined libGL.so
+    # depending on what is installed, which is more indirection than this
+    # small, throwaway test target needs -- a direct find_library for both
+    # libEGL and libGL is simpler and exactly matches what
+    # tests/offscreen_shader_test.cpp itself links against and loads function
+    # pointers from (eglGetProcAddress()).
+    find_library(KUURA_FROST_EGL_LIBRARY EGL REQUIRED)
+    find_library(KUURA_FROST_GL_LIBRARY GL REQUIRED)
+
+    add_executable(kuura_frost_offscreen_shader_test
+        tests/offscreen_shader_test.cpp
+    )
+    target_link_libraries(kuura_frost_offscreen_shader_test PRIVATE
+        "${KUURA_FROST_EGL_LIBRARY}"
+        "${KUURA_FROST_GL_LIBRARY}"
+    )
+    target_include_directories(kuura_frost_offscreen_shader_test PRIVATE
+        # frost_shader.h (the shared GLSL source, see that header's own top
+        # comment) and the same generated <tokens.h> the real plugin consumes
+        # -- both included by path/relative include in the test rig itself,
+        # this only adds the generated header's directory to the search path.
+        "${CMAKE_CURRENT_SOURCE_DIR}/generated/cpp"
+    )
+    # Inherits this file's own CMAKE_CXX_STANDARD 20 (set at the top, applies
+    # to every target created after it, this one included) -- the test rig's
+    # code only actually needs C++17 (structured bindings over a brace-init
+    # list of tuples), but C++20 is a strict superset for that usage, so there
+    # is nothing to override here.
+endif()

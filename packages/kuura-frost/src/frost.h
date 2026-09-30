@@ -18,6 +18,7 @@ class Decoration;
 namespace KWin
 {
 class GLShader;
+class GLTexture;
 class SurfaceInterface;
 }
 
@@ -46,10 +47,11 @@ namespace Kuura
  *      exactly this and is the direct reference.
  *
  * THIS HEADER IS THE LOCKED INTERFACE for the class shape and the CONTRACT
- * each method must satisfy; src/frost.cpp's current body is a placeholder
- * (declared but not yet implementing the shader math), not the finished
- * effect. The real GLSL fragment/vertex shaders this class loads (see
- * LoadShaders() below) are a separate, not-yet-written deliverable.
+ * each method must satisfy. src/frost.cpp now implements that contract for
+ * real, including the material shader itself (src/frost_shader.h) and the
+ * design-token constants it reads from the package-build-time generated
+ * <tokens.h> (design/generators/cpp_header.py) -- see loadShaders()'s and
+ * apply()'s own docstrings below for exactly what each resolved and why.
  *
  * WHY this derives from KWin::OffscreenEffect and NOT from KWin's own
  * BlurEffect (a plausible-sounding but WRONG assumption, corrected by the V4
@@ -353,7 +355,88 @@ protected:
      * expected values +/- epsilon, exactly the "known background, computed
      * pixel vs. expected" test the working brief asks for. This does not need
      * KWin, redirect(), or a live guest boot at all -- keep it that way, it
-     * is far cheaper to iterate on than another boot_capture.sh cycle.
+     * is far cheaper to iterate on than another boot_capture.sh cycle. See
+     * tests/offscreen_shader_test.cpp for the real rig, sharing the exact same
+     * fragment-shader source (src/frost_shader.h) as this class's own
+     * loadShaders() so the two cannot silently drift apart.
+     *
+     * RESOLVED -- `windowSize` (was "NOT YET a uniform" above): it is NOT set
+     * by apply() or loadShaders() at all, and is NOT read from any
+     * EffectWindow accessor. OffscreenData::paint() (offscreeneffect.cpp, the
+     * base class method Frost cannot override, called every frame right after
+     * apply()) already, unconditionally, calls
+     * `shader->setUniform(GLShader::IntUniform::TextureWidth,
+     * m_texture->width())` / `...TextureHeight...` on WHATEVER shader is bound
+     * (Frost's own, via setShader()) -- confirmed live at
+     * opengl/offscreeneffect.cpp. Their real uniform NAMES are
+     * "textureWidth"/"textureHeight" (opengl/glshader.cpp's own
+     * resolveLocations()). `m_texture`'s size is `(logicalGeometry.size() *
+     * scale).toSize()` -- real DEVICE pixels, already accounting for output
+     * scale -- whereas `EffectWindow::width()`/`height()` (effect/effectwindow.h,
+     * real accessors, confirmed to exist) return LOGICAL, unscaled qreal
+     * geometry, which would be the WRONG quantity for this per-pixel math at
+     * any scale other than 1.0. The shader below therefore declares plain
+     * `uniform int textureWidth;`/`textureHeight;` and builds `windowSize` from
+     * those -- nothing in Frost needs to upload it.
+     *
+     * RESOLVED -- the dither-noise texture (point 4's "verify... live before
+     * assuming Frost can reuse the SAME texture object"): it cannot be shared.
+     * `BlurEffect::m_noisePass.noiseTexture` (plugins/blur/blur.h/.cpp, fetched
+     * at the pinned tag) is a private, non-exposed `std::unique_ptr<GLTexture>`
+     * member of the BlurEffect instance itself, built per-instance by
+     * `ensureNoiseTexture()` from a CPU-side `QImage(256, 256,
+     * Format_Grayscale8)` filled with random bytes and uploaded via
+     * `GLTexture::upload()`. Frost owns its OWN `m_noiseTexture` (below),
+     * generated the same TECHNIQUE (tiled grayscale image, GL_NEAREST +
+     * GL_REPEAT), but never Blur's own GL object.
+     *
+     * RESOLVED -- reusing Blur's noise-pass ARCHITECTURE, not just its texture:
+     * also not possible, for a reason beyond object ownership. Blur applies
+     * noise as a SEPARATE, later, additively-blended draw call
+     * (`BlurEffect::blur()`'s own noise block, blur.cpp) -- but
+     * OffscreenData::paint() (the one place Frost's shader actually draws)
+     * issues exactly ONE draw call with Frost's one bound shader; there is no
+     * hook for a second pass. The shader below therefore samples its own noise
+     * texture INLINE, in the same single fragment shader invocation that also
+     * does the refraction/highlight math, and adds the scaled sample directly
+     * to the already-refracted-and-highlighted colour, rather than a separate
+     * blend pass -- the same sampling CONVENTION as noise.frag
+     * (gl_FragCoord.xy / noiseTextureSize, confirmed usable inside a
+     * ShaderManager trait-generated shader exactly like this one, since
+     * noise.frag is itself loaded through the same
+     * generateShaderFromFile()/generateCustomShader() family), adapted to this
+     * class's single-pass architecture rather than copied verbatim.
+     *
+     * FLAGGED, NOT SILENTLY WORKED AROUND -- why the material.* uniforms
+     * (refractionStrength/edge_falloff/edgeHighlightWidth/Opacity/noiseAmount)
+     * are set ONCE in loadShaders(), not every frame in apply() as this
+     * docstring's own "must reach this shader as per-frame uniforms" wording
+     * above literally asks for: `GLShader::setUniform()`'s real implementation
+     * (opengl/glshader.cpp) is a bare `glUniform*()` call, which the OpenGL
+     * spec applies to whichever program is CURRENTLY BOUND -- not
+     * `glProgramUniform()`, which would target a specific program regardless of
+     * binding. KWin's own established idiom for this (plugins/blur/blur.cpp:
+     * `ShaderManager::instance()->pushShader(shader.get());
+     * shader->setUniform(...); ShaderManager::instance()->popShader();`) always
+     * binds the shader first. But `apply()` runs BEFORE `maybeRender()`/`paint()`
+     * (`OffscreenEffect::drawWindow()`, offscreeneffect.cpp: `apply(...);
+     * offscreenData->maybeRender(window); offscreenData->paint(...);`) -- Frost's
+     * shader is not bound yet when apply() runs, and `paint()`'s own
+     * `ShaderBinder` (which DOES bind it) happens later, in base-class code
+     * Frost cannot hook into. Calling setUniform() from apply() would therefore
+     * write into whatever program happens to be bound at that moment, not
+     * Frost's own -- a real, load-bearing reason, not a convenience shortcut.
+     * Since these five values are compile-time constants (generated from
+     * design/tokens.json once per package build, see
+     * design/generators/cpp_header.py), setting them once, right after
+     * loadShaders() successfully links the shader (bind, set, unbind), is both
+     * correct AND avoids five redundant glUniform calls on every single
+     * composited frame for values that never change at runtime. apply() is
+     * left AS a deliberate, still-documented no-op for this reason (see its own
+     * body comment) -- this is reported here as a genuine, evidence-backed
+     * deviation from this docstring's original framing, per this project's own
+     * "escalate a bigger-than-assumed sub-problem" rule, not a silent
+     * workaround.
      *
      * @param window the window being composited this frame
      * @param mask compositing paint mask, forwarded from KWin, not
@@ -402,14 +485,40 @@ private:
 
     /**
      * Compiles/links the fragment+vertex shader pair via
-     * KWin::ShaderManager::instance()->loadShaderFromCode(...) and stores the
-     * result for apply() to bind with setShader(). Not yet given real shader
-     * source (see the class docstring) -- the current placeholder body must
-     * not silently "succeed" with an empty/no-op shader; it should leave the
-     * effect in the same safe, disabled state supported() = false would
-     * produce, until real shaders exist.
+     * KWin::ShaderManager::instance()->generateCustomShader(...) (the real
+     * method name -- KWin's ShaderManager has no `loadShaderFromCode()`,
+     * confirmed against opengl/glshadermanager.h at the pinned tag) and stores
+     * the result for apply() to bind with setShader(). Also generates Frost's
+     * own noise texture (generateNoiseTexture()) and, once the shader links
+     * successfully, binds it once (ShaderManager::pushShader()/popShader()) to
+     * upload the five material.* constants and fix the noise sampler's texture
+     * unit -- see apply()'s own docstring for why this happens here, once, and
+     * not per-frame in apply() itself. Real shader source: src/frost_shader.h
+     * (kFrostFragmentShaderSource), shared verbatim with the offscreen test rig.
+     * If the shader fails to compile/link, or the noise texture fails to
+     * upload, m_shader is left null (safe-disabled state, matching
+     * supported() == false) rather than pretending a broken/partial shader
+     * "succeeded".
      */
     void loadShaders();
+
+    /**
+     * Builds Frost's OWN tiled grayscale noise texture (256x256,
+     * GL_NEAREST + GL_REPEAT) and stores it in m_noiseTexture, for the dither
+     * step (apply() docstring, point 4) to sample every frame. Mirrors the
+     * TECHNIQUE `BlurEffect::ensureNoiseTexture()` uses (plugins/blur/blur.cpp
+     * at the pinned tag: a CPU-side QImage filled with random grayscale bytes,
+     * uploaded via GLTexture::upload()) -- NOT a call to that method or a
+     * reference to its result, which is a private member of a different
+     * effect's own instance and cannot be shared (see apply()'s own docstring
+     * for the full citation). Called once from loadShaders(): the texture's
+     * content is static dither noise, not per-window or per-frame state, so
+     * regenerating it more often would only cost GPU upload bandwidth for no
+     * visible benefit.
+     *
+     * @return true if the texture was generated and uploaded successfully.
+     */
+    bool generateNoiseTexture();
 
     /**
      * (Re-)connects to one window's decoration's blurRegionChanged signal --
@@ -431,6 +540,13 @@ private:
     // (blur.h) rather than leaking a raw new -- setShader() calls elsewhere
     // pass `.get()`.
     std::unique_ptr<KWin::GLShader> m_shader;
+
+    // Frost's OWN dither-noise texture (generateNoiseTexture()) -- owned here for
+    // the same reason m_shader is: KWin's Blur effect owns an equivalent texture
+    // as its own private member (BlurEffect::m_noisePass.noiseTexture, blur.h)
+    // rather than exposing it, so Frost cannot reuse Blur's GL object and must
+    // hold its own (see apply()'s own docstring for the full citation).
+    std::unique_ptr<KWin::GLTexture> m_noiseTexture;
 
     // Tracks each redirected-or-considered window's Wayland
     // SurfaceInterface::blurChanged connection so slotWindowDeleted() can

@@ -1,0 +1,70 @@
+# Directory-scoped override for this project's one standalone C-API test rig
+# (offscreen_shader_test.cpp) -- see that file's own top comment for why it
+# deliberately links NO KWin/Qt/GLEW/glad/epoxy/GSL, only bare EGL + desktop
+# GL (avoiding a new dependency this project would otherwise have to license-
+# check, per this project's own mandatory new-package review). Running the
+# root .clang-tidy config's full Checks list against it produced ~50 warnings
+# that all trace back to that SAME single root cause: EGL/GL are C APIs built
+# entirely on raw pointers, C arrays, and vararg-style logging (eglGetProcAddress
+# returns a type that can only be reached via reinterpret_cast; eglChooseConfig/
+# glBufferData/glVertexAttribPointer take plain C arrays and raw byte offsets by
+# their own real signatures; there is no bounds-checked alternative without
+# pulling in GSL, which nothing else in this project uses) -- not a real bug at
+# each site, and NOLINT-ing every individual line (dozens, in one file) would
+# hurt this file's readability far more than the checks themselves help.
+#
+# This override does NOT relax anything for the actually shipped plugin code
+# (packages/kuura-frost/src/, still governed by the root .clang-tidy's full
+# Checks list and its HeaderFilterRegex) -- only for this dev-only rig, which
+# is not part of the real build (CMakeLists.txt's KUURA_FROST_BUILD_TESTS is
+# OFF by default; PKGBUILD never turns it on).
+#
+# Excluded here, with reasons (do not remove without understanding why):
+#   -cppcoreguidelines-pro-type-reinterpret-cast
+#     The only way to store what eglGetProcAddress() returns into a typed
+#     PFNGL...PROC function pointer, or to pass a byte offset to
+#     glVertexAttribPointer's `const void *` parameter -- both real, standard
+#     OpenGL C++ idioms, not a cast this file could avoid by writing safer code.
+#   -cppcoreguidelines-pro-type-vararg
+#     std::printf/std::fprintf are this file's only diagnostic output (it
+#     deliberately links no Qt, so no qDebug(); see this file's own top
+#     comment) -- test-result reporting to stderr/stdout, never untrusted data.
+#   -cppcoreguidelines-avoid-c-arrays, -modernize-avoid-c-arrays,
+#   -cppcoreguidelines-pro-bounds-array-to-pointer-decay
+#     EGL's own real config/context/pbuffer attribute lists (eglChooseConfig,
+#     eglCreateContext, eglCreatePbufferSurface) are plain EGL_NONE-terminated
+#     C arrays by their own real signatures -- the API itself, not a choice
+#     this file made.
+#   -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access
+#     Raw uint8_t buffer indexing while procedurally generating the test's
+#     known input texture -- the same std::span-has-no-checked-accessor
+#     situation as frost.cpp's own generateNoiseTexture() (see that function's
+#     NOLINT comment for the full reasoning; span was tried there first and
+#     rejected for trading one warning for another with no real safety gain).
+#   -performance-no-int-to-ptr
+#     glVertexAttribPointer's byte-offset-as-pointer parameter is the
+#     universal, standard OpenGL vertex-attribute idiom since GL 2.0; there is
+#     no alternative API.
+#   -modernize-use-designated-initializers
+#     Would require rewriting this file's entire ~28-row GL-function-pointer
+#     loading table (plus one struct return) for a purely stylistic gain with
+#     no safety or correctness implication.
+#   -cppcoreguidelines-avoid-non-const-global-variables
+#     The ~28 PFNGL...PROC function-pointer globals this file's loadGlFunctions()
+#     populates once at startup (the manual eglGetProcAddress() loading this
+#     file's own top comment explains, chosen specifically to avoid a
+#     GLEW/glad/epoxy dependency) -- the exact same "mutable global function
+#     pointer, resolved once" pattern those very libraries themselves generate
+#     for the same reason: there is no other way to store the address of a
+#     runtime-resolved GL entry point in C++ before main() needs to call it.
+InheritParentConfig: true
+Checks: >
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-avoid-c-arrays,
+  -modernize-avoid-c-arrays,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  -performance-no-int-to-ptr,
+  -modernize-use-designated-initializers,
+  -cppcoreguidelines-avoid-non-const-global-variables
