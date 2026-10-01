@@ -66,6 +66,14 @@ depends=(
     # instead of being a literal string like the entries above (docs/SHELL_CONTRACT.md:
     # "installed by kuura-desktop (added to its depends)").
     "${DISTRO_NAME}-shell"
+    # Shutdown/logout confirmation dialog, a Plasma Look-and-Feel KPackage
+    # (Vaihe 6, a package of this monorepo) - real-boot verified 2026-10-01
+    # (ksmserver-logout-greeter --windowed under Xvfb), see
+    # packages/kuura-lookandfeel/PKGBUILD's own comment for the full detail.
+    # Activated via kdeglobals, not this depends list alone - see
+    # packages/kuura-shell/skel/.config/kdeglobals's own LookAndFeelPackage
+    # comment.
+    "${DISTRO_NAME}-lookandfeel"
     # Audio and network applets
     'plasma-nm'
     'plasma-pa'

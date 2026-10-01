@@ -8,17 +8,20 @@
 # why it needs no KPackage of its own). Ships no upstream source; built from
 # this monorepo at package-build time, never at first login.
 #
-# SEPARATE PACKAGE, NOT folded into kuura-shell or kuura-desktop - the same
-# reasoning packages/kuura-sddm/PKGBUILD and packages/kuura-firefox/PKGBUILD
-# already give for themselves: this is its own, independently toggleable
-# system surface (activated purely through kdeglobals' own
-# LookAndFeelPackage key, see packages/kuura-shell/skel/.config/kdeglobals's
-# own header comment) with its own real system dependency (plasma-workspace,
-# the package that ships ksmserver-logout-greeter, the real binary that
-# loads this package's own Logout.qml). NOT added to kuura-desktop's own
-# `depends` here - that wiring is a deliberate, separate human decision made
-# AFTER this package is verified, matching the kuura-sddm/kuura-firefox
-# precedent exactly (see kuura-sddm/PKGBUILD's own comment on this).
+# SEPARATE PACKAGE, NOT folded into kuura-shell - the same reasoning
+# packages/kuura-sddm/PKGBUILD and packages/kuura-firefox/PKGBUILD already
+# give for themselves: this is its own, independently toggleable system
+# surface (activated purely through kdeglobals' own LookAndFeelPackage key,
+# see packages/kuura-shell/skel/.config/kdeglobals's own header comment)
+# with its own real system dependency (plasma-workspace, the package that
+# ships ksmserver-logout-greeter, the real binary that loads this package's
+# own Logout.qml).
+#
+# Added to kuura-desktop's own `depends` once real-boot verification (the
+# --windowed Xvfb test, see this change's own handback/report) was in,
+# matching the kuura-sddm/kuura-firefox precedent exactly - see
+# packages/kuura-desktop/PKGBUILD's own comment next to
+# "${DISTRO_NAME}-lookandfeel".
 #
 # ON-DISK PACKAGE ID IS A FIXED LITERAL, NOT ${DISTRO_NAME} - unlike every
 # other generated package in this monorepo. The real KPackage plugin id
