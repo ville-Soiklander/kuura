@@ -12,8 +12,11 @@ from design.generate import generate, main
 class TestGenerate:
     """Tests for generate() function."""
 
-    def test_generate_writes_twelve_files(self, tmp_path):
-        """generate() should write exactly 12 files: 4 generators x 2 modes, plus 3 mode-independent layout files, plus 1 mode-independent C++ header."""
+    def test_generate_writes_fourteen_files(self, tmp_path):
+        """generate() should write exactly 14 files: 4 generators x 2 modes, plus 3
+        mode-independent layout files, plus 1 mode-independent C++ header, plus 1
+        mode-independent fontconfig alias, plus 1 mode-independent kwin sliding-popups
+        ini fragment."""
         from design.validate import load_tokens
 
         tokens_path = Path(__file__).parent.parent / "tokens.json"
@@ -28,8 +31,8 @@ class TestGenerate:
              patch("design.generators.cpp_header.render", return_value="// header output\n"):
             result = generate(tokens, tmp_path, "test_theme")
 
-        # Verify exactly 12 files were created
-        assert len(result) == 13, f"Expected 13 files, got {len(result)}: {result}"
+        # Verify exactly 14 files were created
+        assert len(result) == 14, f"Expected 14 files, got {len(result)}: {result}"
 
         # Verify all files exist
         for path in result:
@@ -55,13 +58,13 @@ class TestGenerate:
 
         # Verify directory structure
         dirs = set(p.parent.name for p in result)
-        assert dirs == {"plasma", "kvantum", "gtk", "qml", "layout", "cpp", "fontconfig"}, \
-            f"Expected 7 directories, got {dirs}"
+        assert dirs == {"plasma", "kvantum", "gtk", "qml", "layout", "cpp", "fontconfig", "kwin"}, \
+            f"Expected 8 directories, got {dirs}"
 
-        # Verify filenames contain the theme name (except qml's, layout's and cpp's
-        # own fixed, real-target filenames, which do not vary by theme name)
+        # Verify filenames contain the theme name (except qml's, layout's, cpp's and
+        # kwin's own fixed, real-target filenames, which do not vary by theme name)
         for path in result:
-            assert "mytheme" in path.name or path.parent.name in ("qml", "layout", "cpp"), \
+            assert "mytheme" in path.name or path.parent.name in ("qml", "layout", "cpp", "kwin"), \
                 f"Expected theme name in {path.name}"
 
     def test_generate_invalid_name_raises_valueerror(self, tmp_path):
@@ -111,7 +114,7 @@ class TestGenerate:
                  patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
                  patch("design.generators.cpp_header.render", return_value="// header output\n"):
                 result = generate(tokens, tmp_path, valid_name)
-                assert len(result) == 13
+                assert len(result) == 14
 
     def test_generate_calls_all_six_generators(self, tmp_path):
         """generate() should call all six generator.render() functions."""
@@ -251,7 +254,7 @@ class TestMain:
         assert out_dir.exists(), "Output directory should be created"
         # Verify files were written (only count files, not directories)
         files = [p for p in out_dir.rglob("*") if p.is_file()]
-        assert len(files) == 13, f"Expected 13 files, got {len(files)}: {files}"
+        assert len(files) == 14, f"Expected 14 files, got {len(files)}: {files}"
 
     def test_main_default_tokens_path(self, tmp_path):
         """main() should use default tokens.json if not specified."""
@@ -451,8 +454,8 @@ class TestEndToEnd:
         # If all generators are implemented, run the end-to-end test
         result = generate(tokens, tmp_path, "e2e_theme")
 
-        # Verify 12 files were created
-        assert len(result) == 13
+        # Verify 14 files were created
+        assert len(result) == 14
         for path in result:
             assert path.exists(), f"File not created: {path}"
             # Verify file is not empty and ends with newline

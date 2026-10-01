@@ -342,6 +342,109 @@ own hard-coded duration, not the same kind of value as `design/tokens.json`'s
 deliberately not done, to avoid dressing up an approximation as a real
 mapping. This is the model the KRunner "material" finding above follows.
 
+## Animation curves (motion tokens)
+
+Vaihe 6 ("sovellustason viimeistely") asked to unify animation curves everywhere
+using `design/tokens.json`'s motion tokens (`motion.duration.{instant,fast,base,
+slow}` = 100/180/260/400ms, `motion.easing_standard` = a cubic-bezier string,
+`motion.easing_spring` = {mass,stiffness,damping}). Investigated the same way the
+KWin decoration, Overview and KRunner findings above were — by reading the real,
+pinned KDE/Qt source (kwin 6.7.5, kirigami/qqc2-desktop-style 6.30.0, fetched
+from invent.kde.org at those exact tags), not by assuming a plausible-sounding
+config key exists.
+
+**1. One real, exact lever wired up: `kwinrc [Effect-slidingpopups]
+SlideInTime`/`SlideOutTime`.** `src/plugins/slidingpopups/slidingpopups.cpp` at
+the pinned kwin v6.7.5 tag, `SlidingPopupsEffect::reconfigure(ReconfigureFlags
+flags)`:
+```cpp
+m_slideInDuration = animationTime(SlidingPopupsConfig::slideInTime() != 0
+    ? std::chrono::milliseconds(SlidingPopupsConfig::slideInTime()) : 200ms);
+m_slideOutDuration = animationTime(SlidingPopupsConfig::slideOutTime() != 0
+    ? std::chrono::milliseconds(SlidingPopupsConfig::slideOutTime()) : 200ms);
+```
+`SlideInTime`/`SlideOutTime` are real, absolute-millisecond `kwinrc` keys (0 means
+"use the compiled 200ms default"; any other value is used as-is). Because
+`design/tokens.json`'s `motion.duration.*` values are already absolute
+millisecond counts, writing `motion.duration.fast` (180ms) into this key is a
+lossless, non-approximated mapping — unlike the two cases below. Implemented in
+`design/generators/kwin_motion.py` (`render_slidingpopups_fragment()`), wired
+into `design/generate.py`'s `generate()` as the 14th output file
+(`kwin/slidingpopups.ini`), and appended onto the static
+`packages/kuura-shell/skel/.config/kwinrc` by `PKGBUILD`'s `package()` step
+(plain concatenation — see that PKGBUILD's own comment for why this is safe).
+`SlideInTime`/`SlideOutTime` drive `KWindowEffects::slideWindow()`, the
+mechanism various `PlasmaQuick::Dialog`-based popups use to slide in from an
+edge — a different, unrelated mechanism from the separate SlidingNotifications
+effect, which hardcodes its own curve (see point 3 below).
+
+**2. `kdeglobals [KDE] AnimationDurationFactor`: real and live, but
+deliberately NOT used.** Confirmed real at kwin v6.7.5,
+`src/kcms/animations/animationskdeglobalssettings.kcfg`:
+```xml
+<entry name="animationDurationFactor" key="AnimationDurationFactor" type="Double">
+  <label>Animation speed</label>
+  <default>1.0</default>
+</entry>
+```
+And confirmed live in the real consumer chain, `frameworks/qqc2-desktop-style`
+at the pinned v6.30.0 tag. `kirigami-plasmadesktop-integration/
+animationspeedprovider.cpp` reads the exact same `kdeglobals` key:
+```cpp
+m_animationSpeedModifier = std::max<double>(0.0, generalCfg.readEntry(u"AnimationDurationFactor"_s, 1.0));
+```
+and `kirigami-plasmadesktop-integration/plasmadesktopunits.cpp` (the class
+`PlasmaDesktopUnits`, extending `Kirigami::Platform::Units`, which is what
+every Kirigami-based Plasma surface gets its animation durations from) applies
+it as a single multiplier to one base duration, then derives the other three
+from fixed ratios off that same base:
+```cpp
+constexpr int defaultLongDuration = 200;
+// ...
+longDuration = qRound(longDuration * animationSpeedModifier);
+setVeryShortDuration(longDuration / 4);
+setShortDuration(longDuration / 2);
+setLongDuration(longDuration);
+setVeryLongDuration(longDuration * 2);
+```
+With the factor at its default 1.0, this is 50/100/200/400ms — a fixed
+**1:2:4:8** ratio off a 50ms unit. `design/tokens.json`'s own four buckets
+(100/180/260/400ms) are a fixed **1:1.8:2.6:4.0** ratio off its own smallest
+bucket (`instant`) — a different shape, not a scaled copy of Kirigami's. One
+unitless scalar cannot turn one fixed ratio into the other: picking a factor
+that makes `AnimationDurationFactor × 200ms` land exactly on `base` (260ms,
+factor 1.3) leaves `veryShort` at `260/4` = 65ms against this project's
+`instant` (100ms) — a 35% miss — and `veryLong` at `260×2` = 520ms against
+`slow` (400ms) — a 30% miss, in the opposite direction from the first. Picking
+any other bucket to match exactly just moves the 30–100% drift onto the other
+three. That is an approximation dressed up as a real mapping, which this
+project's own standing rule (see `packages/kuura-shell/skel/.config/kwinrc`'s
+"Effect-overview" comment, which rejected the same lever for the same reason
+first) declines to ship. `design/generators/kwin_motion.py`'s own module
+docstring records this same reasoning at the implementation site.
+
+**3. `motion.easing_standard` / `motion.easing_spring`: confirmed no config
+surface exists anywhere in the real stack surveyed.** Every real curve shape
+found in the pinned source is a literal, hardcoded value, never read from any
+config file. Example, kwin v6.7.5's Overview effect,
+`src/plugins/overview/qml/Main.qml` (three separate `NumberAnimation` blocks,
+all identical in this respect):
+```qml
+NumberAnimation {
+    duration: effect.animationDuration
+    easing.type: Easing.OutCubic
+}
+```
+`easing.type` is the literal Qt Quick enum `Easing.OutCubic`, compiled into the
+QML; there is no property, kcfg entry or config group anywhere in this file (or
+in `slidingpopups.cpp`'s own curve, a plain linear interpolation with no easing
+property at all) that a packager could point at `motion.easing_standard`'s
+cubic-bezier control points or `motion.easing_spring`'s mass/stiffness/damping
+triple. Reaching either would mean patching and recompiling upstream
+KWin/Kirigami, out of scope for a config-only package like this one. Neither is
+implemented; this is reported as confirmed-not-achievable, not silently
+dropped.
+
 ## Verification
 
 1. `harness/states.toml`: once real panels/shortcuts/theme exist, remove the

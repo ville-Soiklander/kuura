@@ -9,7 +9,7 @@ Usage (from the project root):
     python -m design.generate [--tokens FILE] [--out-dir DIR] [--name NAME]
 
 Output layout under the output directory (both modes for every target, plus
-five mode-independent layout/header/fontconfig files):
+six mode-independent layout/header/fontconfig/kwin files):
     plasma/<name>-light.colors   plasma/<name>-dark.colors    (generators.plasma_colors)
     kvantum/<name>-light.kvconfig kvantum/<name>-dark.kvconfig (generators.kvantum)
     gtk/<name>-light.css         gtk/<name>-dark.css          (generators.gtk_css)
@@ -19,6 +19,7 @@ five mode-independent layout/header/fontconfig files):
     layout/kactivitymanagerdrc                                   (generators.plasma_layout.render_activities)
     cpp/tokens.h                                                 (generators.cpp_header.render)
     fontconfig/<name>-fonts.conf                                 (generators.fontconfig.render)
+    kwin/slidingpopups.ini                                       (generators.kwin_motion.render_slidingpopups_fragment)
 
 Defaults, nothing hard coded: --tokens = the tokens.json next to this file;
 --out-dir = ".build/generated" relative to the project root (the parent of this
@@ -47,7 +48,7 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         name: Theme name passed to the generators and used in file names.
 
     Returns:
-        The paths of all written files, sorted, always 13 entries: the 4
+        The paths of all written files, sorted, always 14 entries: the 4
         mode-dependent generators below times 2 modes (light/dark), plus three
         mode-independent panel layout files (layout has no light/dark
         variant, so generators.plasma_layout's three functions are each called
@@ -61,7 +62,12 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         is rendered once, not per mode), plus ONE mode-independent fontconfig
         alias file (generators.fontconfig.render(tokens, name) - also no mode
         argument, for the same reason, but DOES take name since the alias
-        family itself is branded per distro; see that module's own docstring).
+        family itself is branded per distro; see that module's own docstring),
+        plus ONE mode-independent kwinrc ini fragment
+        (generators.kwin_motion.render_slidingpopups_fragment(tokens) - a
+        single real, non-approximated motion-token lever, see that module's
+        own docstring for why it is the only one; mode-independent for the
+        same reason as the three levels above, no mode argument either).
 
     Raises:
         ValueError: if name is not lowercase letters, digits, "_" or "-".
@@ -71,7 +77,16 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         raise ValueError("name must be lowercase letters, digits, '_' or '-'")
 
     # Import generators here to avoid circular imports
-    from design.generators import cpp_header, fontconfig, gtk_css, qml_singleton, plasma_colors, kvantum, plasma_layout
+    from design.generators import (
+        cpp_header,
+        fontconfig,
+        gtk_css,
+        kvantum,
+        kwin_motion,
+        plasma_colors,
+        plasma_layout,
+        qml_singleton,
+    )
 
     # Create output directory
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -168,6 +183,20 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
     fontconfig_path = fontconfig_subdir / f"{name}-fonts.conf"
     fontconfig_path.write_text(fontconfig.render(tokens, name), encoding="utf-8")
     written_paths.append(fontconfig_path)
+
+    # KWin sliding-popups ini fragment: mode-independent like the three blocks
+    # above, and takes no `name` either (unlike fontconfig) - it only derives
+    # from motion.duration.fast. See design/generators/kwin_motion.py's own
+    # module docstring for why this is the one real, non-approximated motion
+    # lever this project wires into KWin config, and why it is a standalone
+    # fragment rather than a full kwinrc (packages/kuura-shell/PKGBUILD
+    # concatenates it onto the static skel kwinrc at package-build time).
+    kwin_subdir = out_dir / "kwin"
+    kwin_subdir.mkdir(parents=True, exist_ok=True)
+
+    slidingpopups_path = kwin_subdir / "slidingpopups.ini"
+    slidingpopups_path.write_text(kwin_motion.render_slidingpopups_fragment(tokens), encoding="utf-8")
+    written_paths.append(slidingpopups_path)
 
     # Return sorted paths
     return sorted(written_paths)

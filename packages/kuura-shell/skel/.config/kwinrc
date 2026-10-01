@@ -1,3 +1,14 @@
+# NOTE: the file actually installed to /etc/skel/.config/kwinrc on a real system has
+# ONE MORE section than what you see below. packages/kuura-shell/PKGBUILD's own
+# package() step appends a generated [Effect-slidingpopups] fragment (SlideInTime/
+# SlideOutTime, derived from design/tokens.json's motion.duration.fast) to this
+# file's content at package-build time - see design/generators/kwin_motion.py's
+# module docstring for the full reasoning (the one real, non-approximated motion-
+# token lever this project wires into KWin config) and docs/SHELL_CONTRACT.md's
+# "Animation curves (motion tokens)" section for the live-verification trail. This
+# file on disk in the repository intentionally stays static and does not carry that
+# section itself.
+#
 # Window decoration, titlebar-button placement, corner style and Overview-effect
 # tuning for new users of the desktop shell (V3 of the working brief). Installed to
 # /etc/skel/.config/kwinrc by the kuura-shell package (docs/SHELL_CONTRACT.md), so a

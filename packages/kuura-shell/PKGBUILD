@@ -139,7 +139,20 @@ package() {
         "$pkgdir/usr/share/fontconfig/conf.default/51-${DISTRO_NAME}-fonts.conf"
 
     # ---- skel: default configuration for new users, installed verbatim. ----
-    install -Dm644 "$skel/.config/kwinrc" "$pkgdir/etc/skel/.config/kwinrc"
+    # kwinrc is the one exception to "verbatim": design/generators/kwin_motion.py's
+    # generated [Effect-slidingpopups] fragment (SlideInTime/SlideOutTime, from
+    # motion.duration.fast) is appended to the static skel file's own content here,
+    # at package-build time, rather than being hand-copied into the skel file itself
+    # (see that skel file's own new top-of-file note, and design/generators/
+    # kwin_motion.py's module docstring, for the full reasoning). Plain concatenation
+    # is safe because ini files merge cleanly by distinct section - kdeglobals's own
+    # header comment in this same package already relies on this exact fact for a
+    # different future key.
+    local kwinrc_tmp
+    kwinrc_tmp="$(mktemp)"
+    cat "$skel/.config/kwinrc" "$generated/kwin/slidingpopups.ini" > "$kwinrc_tmp"
+    install -Dm644 "$kwinrc_tmp" "$pkgdir/etc/skel/.config/kwinrc"
+    rm -f "$kwinrc_tmp"
     install -Dm644 "$skel/.config/kglobalshortcutsrc" \
         "$pkgdir/etc/skel/.config/kglobalshortcutsrc"
     install -Dm644 "$skel/.config/kdeglobals" "$pkgdir/etc/skel/.config/kdeglobals"
