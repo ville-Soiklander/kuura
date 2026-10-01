@@ -19,6 +19,18 @@
 # for the same underlying reason (a different install target/lifecycle
 # deserves its own package, even for thematically related output).
 #
+# VERIFIED LIVE 2026-10-01 (closes the one gap the previous commit left open):
+# the generated Main.qml/theme.conf were installed to a real theme directory
+# and sddm-greeter-qt6 --test-mode was actually run under Xvfb (devtools image
+# pre-built once with sddm/qt6-declarative/xvfb/imagemagick so the run itself
+# needs no network) - a real screenshot shows the dark background, clock, the
+# test-mode mock user ("builder") correctly highlighted in the accent colour,
+# password field and Log In button all rendering with this project's own
+# tokens, no blank/broken widgets, no error in the greeter's own log output,
+# and the session picker correctly hidden (sessionModel.count == 1 in test
+# mode). qmllint re-confirmed clean (same warning set as before: expected
+# "unqualified access" on context properties only).
+#
 # NOT wired into kuura-desktop's own `depends` by this change, on purpose -
 # the exact same open, deliberate decision kuura-firefox's own PKGBUILD
 # already flagged for itself (see that file's own "OPEN, DELIBERATE DECISION"
