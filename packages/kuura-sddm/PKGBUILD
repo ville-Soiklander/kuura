@@ -31,12 +31,10 @@
 # mode). qmllint re-confirmed clean (same warning set as before: expected
 # "unqualified access" on context properties only).
 #
-# NOT wired into kuura-desktop's own `depends` by this change, on purpose -
-# the exact same open, deliberate decision kuura-firefox's own PKGBUILD
-# already flagged for itself (see that file's own "OPEN, DELIBERATE DECISION"
-# comment): making every real install pull in this theme is a real product
-# decision left for a human, not something to settle silently while adding
-# the package. This PKGBUILD does not touch kuura-desktop's own file at all.
+# Added to kuura-desktop's own `depends` once the verification above was real
+# (2026-10-01, a human decision after seeing the real greeter boot, matching
+# how kuura-firefox's own equivalent decision was made) - see that file's own
+# `depends` list and its comment next to the `sddm`/`${DISTRO_NAME}-sddm` pair.
 #
 # The package name comes from the environment (DISTRO_NAME, see .env.example),
 # the same convention every other package of this monorepo uses; building by

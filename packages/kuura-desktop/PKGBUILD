@@ -30,8 +30,12 @@ depends=(
     'kwin'
     'kscreen'
     'powerdevil'
-    # Display manager
+    # Display manager, themed with this monorepo's own SDDM greeter (Vaihe 6,
+    # built from the same DISTRO_NAME variable as this package's own name;
+    # real-boot verified 2026-10-01, see packages/kuura-sddm/PKGBUILD's own
+    # "VERIFIED LIVE" comment).
     'sddm'
+    "${DISTRO_NAME}-sddm"
     # Applications
     'dolphin'
     'konsole'
@@ -47,9 +51,10 @@ depends=(
     "${DISTRO_NAME}-firefox"
     # Theme engine
     'kvantum'
-    # Cursor theme - a macOS-inspired variant of KDE Breeze cursors (the default
-    # KDE would otherwise pull in transitively via kwin -> breeze -> breeze-cursors,
-    # which stays fine too but gives no distinct look); see docs/ASSETS.md.
+    # Cursor theme - a variant of KDE Breeze cursors styled after this
+    # project's own visual language (the default KDE would otherwise pull in
+    # transitively via kwin -> breeze -> breeze-cursors, which stays fine too
+    # but gives no distinct look); see docs/ASSETS.md.
     'capitaine-cursors'
     # Own-production icon set, wallpapers and UI sounds (Vaihe 5, a package of
     # this monorepo, docs/ASSETS.md's own-production note) - built from the

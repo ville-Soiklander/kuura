@@ -82,11 +82,15 @@ on CI runners); the build never needs a root-owned container engine.
   `$(DISTRO_NAME)-assets` (a package of this monorepo: the own-production
   icon set, wallpapers and UI sounds, Vaihe 5 - see
   `packages/kuura-assets/PKGBUILD`'s own SCOPE comment for exactly what is
-  and is not live-verified yet), and `$(DISTRO_NAME)-firefox` (a package of
+  and is not live-verified yet), `$(DISTRO_NAME)-firefox` (a package of
   this monorepo: Firefox with a preinstalled, token-themed default profile
   and about:config defaults, Vaihe 6 - the profile pre-seeding mechanism was
   independently verified against a real, fresh Firefox boot before this
-  package was added here, not merely documented).
+  package was added here, not merely documented), and `$(DISTRO_NAME)-sddm`
+  (a package of this monorepo: the SDDM login-screen theme, Vaihe 6 - the
+  generated greeter was independently verified with a real
+  `sddm-greeter-qt6 --test-mode` boot under Xvfb before this package was
+  added here).
 - Every PKGBUILD passes `namcap` without errors.
 - Third-party assets (fonts, icons) are listed in `docs/ASSETS.md` before merge.
 
