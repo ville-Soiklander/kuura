@@ -1,0 +1,94 @@
+# Lock-screen wallpaper: points KScreenLocker's own real greeter wallpaper
+# plugin at one of this project's own wallpapers (packages/kuura-assets,
+# design/generate_wallpapers.py) instead of leaving it on whatever stock
+# default the "org.kde.image" plugin falls back to. Installed to
+# /etc/skel/.config/kscreenlockerrc by the kuura-shell package
+# (docs/SHELL_CONTRACT.md) - a per-user default a user can still change
+# through System Settings afterwards, the same role every other file in
+# this directory plays.
+#
+# SCOPE (a deliberate, documented limitation, not an oversight - Vaihe 6 of
+# the working brief, "Sovellustason viimeistely", the lock-screen sub-task):
+# no bespoke lock-screen QML ships in this project. The project owner was
+# shown the real trade-off and explicitly chose the smaller option: forking
+# the lock screen's own QML would mean forking Plasma's entire "Plasma/
+# Shell" KPackage (panels/desktop layout included - unlike "Plasma/
+# LookAndFeel", which packages/kuura-lookandfeel/ already uses for the
+# logout dialog, Plasma/Shell has no per-component fallback), a much bigger
+# blast radius for one small cosmetic touch. This file ships only a branded
+# default wallpaper through the lock screen's own real config keys below,
+# and relies on the lock screen's own existing, confirmed-free colour
+# inheritance for everything else: KDE's own real LockScreenUi.qml sets
+# `Kirigami.Theme.colorSet: Kirigami.Theme.Complementary`, so the unlock
+# text/avatar there already follow the active colour scheme with no file of
+# ours needed for that part.
+#
+# REAL CONFIG KEYS (confirmed live against the pinned kscreenlocker 6.7.5-1
+# / plasma-workspace 6.7.5-1 source at invent.kde.org, git tag v6.7.5,
+# cross-checked against a real distro's own shipped kscreenlockerrc and
+# KDE's own plasma-apply-wallpaperimage.cpp - not guessed):
+#   - [Greeter] WallpaperPlugin=org.kde.image - the real KConfigXT entry
+#     (kscreenlocker's settings/kscreenlockersettings.kcfg:
+#     `<entry name="wallpaperPluginId" key="WallpaperPlugin"><default>
+#     org.kde.image</default></entry>`), read by the greeter
+#     (greeterapp.cpp: `m_wallpaperPackage.setPath(KScreenSaverSettingsBase
+#     ::self()->wallpaperPluginId())`) to decide which wallpaper KPackage to
+#     load. "org.kde.image" is already the real default, so this line is a
+#     no-op on a stock install - kept here only to make the choice explicit
+#     and because the group below depends on its exact value as a group name.
+#   - [Greeter][Wallpaper][org.kde.image][General] Image=<file:// URL> - the
+#     real nested KConfigXT group a loaded "org.kde.image" wallpaper
+#     package's own config reads (plasma-workspace's wallpapers/image/
+#     imagepackage/contents/config/main.xml: group "General", entry "Image",
+#     type String). The nesting itself is confirmed directly against
+#     shutdowndlg.cpp's real group-building code,
+#     `sharedConfig()->group("Greeter").group("Wallpaper").group(
+#     wallpaperPluginId())`. The value format (a literal "file://<path>"
+#     string, not a bare filesystem path) is confirmed against KDE's own
+#     wallpapers/image/plasma-apply-wallpaperimage.cpp, which builds exactly
+#     `d.writeConfig('Image', 'file://<path>');` (its own source:
+#     `u"d.writeConfig('Image', 'file://" + wallpaperFile + u"');"`) when
+#     setting this same key for the desktop wallpaper picker.
+#   - FillMode is deliberately left UNSET here (keeps the wallpaper plugin's
+#     own real default, FillMode=2 in the same main.xml) - this project has
+#     no documented reason yet to override how the image is cropped/scaled,
+#     matching the "ship only the one real lever this task needs" discipline
+#     design/generators/sddm_theme.py's own module docstring already uses.
+#
+# WALLPAPER CHOICE: design/generate_wallpapers.py's own "radial-glow"
+# composition, dark mode. Picked over the other four compositions because
+# its centred glow fades out towards every edge, leaving calm, low-contrast
+# corners wherever LockScreenUi.qml actually places the clock/avatar/
+# password field (which this project does not control - see SCOPE above);
+# the edge-to-edge two-stop gradients ("vertical-dawn", "diagonal-drift",
+# "banded-horizon") risk a bright or busy patch landing directly behind that
+# text depending on screen resolution/DPI. Dark mode (not light) matches
+# this project's own SDDM greeter's fixed-dark choice
+# (design/generate_sddm.py's own module docstring) for the same underlying
+# reason: a surface that cannot react to the active session's own light/
+# dark toggle reads most consistently as one deliberately fixed, high-
+# contrast choice. Both picks are real product/design calls, not technical
+# requirements discovered by research - flagged explicitly in this change's
+# own handback/report.
+#
+# HARD-CODED "kuura" IN THE PATH BELOW, NOT ${DISTRO_NAME} - a deliberate
+# deviation, flagged explicitly in this change's own handback/report: this
+# file is installed as a plain, static skel file (one `install -Dm644` line
+# in packages/kuura-shell/PKGBUILD's own package(), the same pattern as this
+# directory's kwinrc/kglobalshortcutsrc/kdeglobals/krunnerrc - no sed
+# templating step, unlike kvantum.kvconfig.in/settings.ini.in in this same
+# directory), while the real wallpaper path below is genuinely
+# ${DISTRO_NAME}-dependent: packages/kuura-assets/PKGBUILD installs it under
+# /usr/share/backgrounds/${DISTRO_NAME}/${DISTRO_NAME}-radial-glow-dark.png.
+# For this project's own real deployment DISTRO_NAME is "kuura", so the two
+# values coincide today; if DISTRO_NAME is ever changed, this file must be
+# updated by hand (or converted into a kscreenlockerrc.in template with its
+# own sed step) or the lock screen will silently fall back to no custom
+# wallpaper (a missing Image path is not a crash, just an unbranded default -
+# the same "no package, no crash" failure mode kdeglobals' own
+# LookAndFeelPackage key documents for a missing kuura-lookandfeel package).
+[Greeter]
+WallpaperPlugin=org.kde.image
+
+[Greeter][Wallpaper][org.kde.image][General]
+Image=file:///usr/share/backgrounds/kuura/kuura-radial-glow-dark.png

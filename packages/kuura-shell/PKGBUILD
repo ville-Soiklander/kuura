@@ -148,6 +148,10 @@ package() {
     # live investigation (docs/SHELL_CONTRACT.md scope item 4) that found this key
     # and found no real "material" (opacity/blur/radius) lever to go with it.
     install -Dm644 "$skel/.config/krunnerrc" "$pkgdir/etc/skel/.config/krunnerrc"
+    # kscreenlockerrc: the lock screen's own branded default wallpaper (Vaihe 6,
+    # the lock-screen sub-task) -- see that file's own header comment for the
+    # real, confirmed kscreenlockerrc/org.kde.image config keys behind this.
+    install -Dm644 "$skel/.config/kscreenlockerrc" "$pkgdir/etc/skel/.config/kscreenlockerrc"
 
     # ---- skel templates: these two name the active theme, so (unlike the plain
     # skel files above) they cannot be static data -- $DISTRO_NAME is only known at
