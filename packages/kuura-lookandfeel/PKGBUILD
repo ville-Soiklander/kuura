@@ -1,0 +1,96 @@
+# Logout/shutdown confirmation dialog, packaged as a real Plasma
+# "Look and Feel" KPackage (Vaihe 6 of the working brief, "Sovellustason
+# viimeistely", the shutdown-dialog sub-task - its own separate work-queue
+# item, alongside but independent of the notifications/lock-screen/SDDM-theme
+# sub-tasks; SDDM is already its own separate package, packages/kuura-sddm/,
+# and the lock screen's own small touch is a per-user skel file in
+# packages/kuura-shell/ instead - see that package's own kscreenlockerrc for
+# why it needs no KPackage of its own). Ships no upstream source; built from
+# this monorepo at package-build time, never at first login.
+#
+# SEPARATE PACKAGE, NOT folded into kuura-shell or kuura-desktop - the same
+# reasoning packages/kuura-sddm/PKGBUILD and packages/kuura-firefox/PKGBUILD
+# already give for themselves: this is its own, independently toggleable
+# system surface (activated purely through kdeglobals' own
+# LookAndFeelPackage key, see packages/kuura-shell/skel/.config/kdeglobals's
+# own header comment) with its own real system dependency (plasma-workspace,
+# the package that ships ksmserver-logout-greeter, the real binary that
+# loads this package's own Logout.qml). NOT added to kuura-desktop's own
+# `depends` here - that wiring is a deliberate, separate human decision made
+# AFTER this package is verified, matching the kuura-sddm/kuura-firefox
+# precedent exactly (see kuura-sddm/PKGBUILD's own comment on this).
+#
+# ON-DISK PACKAGE ID IS A FIXED LITERAL, NOT ${DISTRO_NAME} - unlike every
+# other generated package in this monorepo. The real KPackage plugin id
+# (this package's own metadata.json KPlugin.Id, and the real directory it is
+# installed under, /usr/share/plasma/look-and-feel/<id>/) MUST be exactly
+# "kuura" to match the value already written into kdeglobals' own
+# LookAndFeelPackage key (packages/kuura-shell/skel/.config/kdeglobals) -
+# that key is itself a fixed literal for the same reason (see its own header
+# comment). Changing DISTRO_NAME therefore does NOT rename this package's
+# own on-disk KPackage id or install directory below, only the pacman
+# package name itself - see design/generators/lookandfeel_theme.py's own
+# module docstring (point 5) for the full reasoning.
+#
+# The pacman PACKAGE name still comes from the environment (DISTRO_NAME, see
+# .env.example), the same convention every other package of this monorepo
+# uses; building by hand without it fails with a clear error. makepkg is run
+# through build/build_repo.sh, which exports the variable.
+
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-lookandfeel"
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Logout/shutdown confirmation dialog, packaged as a Plasma Look-and-Feel KPackage"
+arch=('any')
+url='https://github.com/ville-Soiklander/kuura'
+# Themes, configuration and scripts of the project are GPL-3.0-or-later (see
+# LICENSE and docs/LICENSES/README.md).
+license=('GPL-3.0-or-later')
+# plasma-workspace: ships ksmserver-logout-greeter, the real binary that
+# loads this package's own contents/logout/Logout.qml at the real,
+# confirmed KPackage entry point (design/generators/lookandfeel_theme.py's
+# own module docstring).
+depends=('plasma-workspace')
+# python: build() runs design/generate_lookandfeel.py through its own
+# `python -m` CLI. Standard library only (see that module's own docstring),
+# so no further makedepends.
+makedepends=('python')
+
+# build(): generate metadata.json/contents/logout/Logout.qml (mode pinned to
+# "dark" - see design/generate_lookandfeel.py's own module docstring for why)
+# from design/tokens.json with the LOCKED design/generate_lookandfeel.py CLI.
+# Nothing here parses tokens.json itself - that stays entirely inside the
+# generator. Unlike packages/kuura-sddm/PKGBUILD, no sed templating step is
+# needed here: design/generate_lookandfeel.py's own render_metadata_json()
+# already produces the complete, final metadata.json content directly (see
+# that module's own docstring - KPlugin.Id is a fixed literal baked in by
+# the generator itself, not substituted afterwards). namcap's PKGBUILD
+# checks flag any reference to the PKGBUILD's own containing directory as an
+# error wherever it occurs in the file, comments included (confirmed
+# empirically on a sibling package of this monorepo, see
+# packages/kuura-sddm/PKGBUILD's own comment on this) - so that directory
+# name is never written anywhere in this file, every path below is phrased
+# relative to the build tree instead.
+build() {
+    # design/generate_lookandfeel.py's own PROJECT_ROOT is derived from its
+    # own file location: two directories up from this PKGBUILD, inside the
+    # build container once design/ is staged there next to packages/ (see
+    # build/Containerfile). --out-dir must resolve inside that tree -
+    # generate_lookandfeel.py enforces this itself as a path-traversal
+    # guard - so it is pointed at the build tree's own source directory,
+    # already inside it.
+    ( cd "$srcdir/../../.." && python3 -m design.generate_lookandfeel \
+        --out-dir "$srcdir/generated" --name "$DISTRO_NAME" )
+}
+
+# package(): installs the generated KPackage to its real, fixed path - see
+# this file's own header comment above for why the directory name below is
+# the literal "kuura", not ${DISTRO_NAME}.
+package() {
+    local generated="$srcdir/generated/lookandfeel"
+    local pkg_dir="$pkgdir/usr/share/plasma/look-and-feel/kuura"
+
+    install -Dm644 "$generated/metadata.json" "$pkg_dir/metadata.json"
+    install -Dm644 "$generated/contents/logout/Logout.qml" \
+        "$pkg_dir/contents/logout/Logout.qml"
+}

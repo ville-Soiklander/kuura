@@ -23,5 +23,26 @@
 # (Kvantum/GTK4 dark-mode theming). A later change adding it can add a [General]
 # section to this same file; ini files merge cleanly by section, so this is not a
 # conflict, just a heads-up for whoever writes that section.
+#
+# LookAndFeelPackage (added for Vaihe 6, the shutdown/logout dialog sub-task):
+# the real, confirmed key ksmserver-logout-greeter's own main.cpp reads at
+# startup (KConfigGroup(kdeglobals, "KDE").readEntry("LookAndFeelPackage", ...)),
+# and the same key plasma-workspace's own "Global Theme" KCM schema
+# (kcms/lookandfeel/lookandfeelsettings.kcfg) declares, default
+# "org.kde.breeze.desktop" - confirmed live against the pinned plasma-workspace
+# 6.7.5-1 source, not guessed. "kuura" here is this project's own package id
+# (packages/kuura-lookandfeel/'s own metadata.json KPlugin.Id), NOT the
+# DISTRO_NAME variable substituted at build time the way other skel templates in
+# this package are - LookAndFeelPackage's own value is a fixed, real on-disk
+# KPackage plugin id (/usr/share/plasma/look-and-feel/<id>/), and this file (unlike
+# kvantum.kvconfig.in/settings.ini.in) is installed as a plain static file, not a
+# .in template passed through sed - a DISTRO_NAME-dependent id would need this file
+# to become a template too, which is not worth it for one key while DISTRO_NAME is
+# "kuura" for this project's own real deployment. This key only does anything
+# useful once packages/kuura-lookandfeel is also installed (no build-time coupling
+# between the two packages - a missing package here just means
+# KLookAndFeelManager silently keeps whatever Look-and-Feel package was already
+# active instead, not a crash).
 [KDE]
 widgetStyle=kvantum
+LookAndFeelPackage=kuura
