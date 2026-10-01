@@ -104,7 +104,10 @@ steps = [
 
 [[state]]
 name = "notification"
-description = "Desktop notification with a fixed summary and body that stays until closed; the stock notification pop-up plays the role of the future one."
+# No bespoke component is coming here, unlike the other states in this file - see
+# docs/HARNESS_CONTRACT.md's own note on this state for why (confirmed against the
+# real KDE source: the stock pop-up already follows the active colour scheme).
+description = "Desktop notification with a fixed summary and body that stays until closed; uses Plasma's own stock notification pop-up, confirmed to already follow the active colour scheme."
 steps = [
     { run = ["notify-send", "--app-name", "harness", "--expire-time", "0", "Sample notification", "Body text of the sample notification"] },
     { settle = true },

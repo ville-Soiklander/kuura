@@ -84,6 +84,20 @@ The states required by the working brief: `desktop-empty`, `menubar-open`,
 components exist, each state is defined with the stock component that plays its role
 (for example the application launcher stands in for the menubar); the description says so.
 
+`notification` is the one state in this list where no bespoke component is coming:
+investigated and confirmed (2026-10-01, against the real plasma-workspace/libplasma
+source pinned at this project's own KDE version, see `docs/VERSIONS.md`) that the
+stock popup's text colour (`Kirigami.Theme`, the same mechanism the lock screen and
+SDDM theme already rely on) and its frame/background (the Plasma Theme's shipped
+`dialogs/background.svg`, which carries the standard `ColorScheme-*` stylesheet
+classes every themed Plasma dialog uses) already follow the active colour scheme
+with zero project code. The only other real, separate `plasmanotifyrc` levers
+(popup position/timeout/do-not-disturb, confirmed via the real kcfg schemas) are
+behavioural, not visual, and nothing in the working brief asks for a non-default
+there. A bespoke visual override would mean shipping a whole custom Plasma Theme
+SVG package re-skinning every Plasma dialog/tooltip/OSD session-wide, not just
+notifications - clearly worse-scoped than what it would buy, so this is not planned.
+
 ## Commands
 
 | Command | Behaviour |
