@@ -1,0 +1,13 @@
+[SddmGreeterTheme]
+Name=@NAME@
+Description=SDDM greeter theme generated from @NAME@'s own design tokens
+Author=@NAME@ project
+License=GPL-3.0-or-later
+Type=sddm-theme
+Version=0.1.0
+Website=https://github.com/ville-Soiklander/kuura
+MainScript=Main.qml
+ConfigFile=theme.conf
+Theme-Id=@NAME@
+Theme-API=2.0
+QtVersion=6

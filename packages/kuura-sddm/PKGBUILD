@@ -1,0 +1,114 @@
+# SDDM login-screen theme: colours, radii and typography generated from this
+# repository's own design/tokens.json into a self-contained QML greeter
+# (Vaihe 6 of the working brief, "Sovellustason viimeistely", the SDDM
+# sub-task - its own separate work queue, alongside but independent of the
+# notifications/shutdown-dialog/lock-screen sub-tasks). Ships no upstream
+# source; built from this monorepo at package-build time, never at first
+# login - the greeter loads at BOOT, before any login has happened at all.
+#
+# SEPARATE PACKAGE, NOT folded into kuura-shell - the SAME reasoning
+# packages/kuura-firefox/PKGBUILD already gives for itself, the closest
+# precedent: SDDM (a) is its own explicitly separate Vaihe 6 work-queue item
+# (four comma-separated sub-tasks in the working brief's own bullet; this
+# package covers exactly one of them), (b) has its own real system dependency
+# (the `sddm` package, matching kuura-firefox's own `firefox` dependency), and
+# (c) has a materially different install lifecycle from kuura-shell's own
+# per-user /etc/skel model: the greeter is a system-wide service that starts
+# before any user session or /etc/skel copy exists, entirely independent of
+# anything kuura-shell manages. Matches the kuura-assets/kuura-shell split
+# for the same underlying reason (a different install target/lifecycle
+# deserves its own package, even for thematically related output).
+#
+# NOT wired into kuura-desktop's own `depends` by this change, on purpose -
+# the exact same open, deliberate decision kuura-firefox's own PKGBUILD
+# already flagged for itself (see that file's own "OPEN, DELIBERATE DECISION"
+# comment): making every real install pull in this theme is a real product
+# decision left for a human, not something to settle silently while adding
+# the package. This PKGBUILD does not touch kuura-desktop's own file at all.
+#
+# The package name comes from the environment (DISTRO_NAME, see .env.example),
+# the same convention every other package of this monorepo uses; building by
+# hand without it fails with a clear error. makepkg is run through
+# build/build_repo.sh, which exports the variable.
+
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-sddm"
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="SDDM login screen theme generated from design/tokens.json"
+arch=('any')
+url='https://github.com/ville-Soiklander/kuura'
+# Themes, configuration and scripts of the project are GPL-3.0-or-later (see LICENSE
+# and docs/LICENSES/README.md).
+license=('GPL-3.0-or-later')
+# sddm: the display manager this package themes and configures.
+# inter-font: design/generators/sddm_theme.py bakes tokens.type.family_ui
+# ("Inter") into Main.qml as a literal font.family - the greeter boots before
+# any user session (and therefore before kuura-shell's own fontconfig alias or
+# any per-user config exists), so this package must pull the real font family
+# in on its own rather than relying on another package's install order.
+depends=('sddm' 'inter-font')
+# python: build() runs design/generate_sddm.py through its `python -m` CLI.
+# Standard library only (see that module's own docstring), so no further
+# makedepends.
+makedepends=('python')
+
+# build(): generate Main.qml/theme.conf (mode pinned to "dark" - see
+# design/generate_sddm.py's own module docstring for why) from
+# design/tokens.json with the LOCKED design/generate_sddm.py CLI. Nothing here
+# parses tokens.json itself - that stays entirely inside the generator. Also
+# renders this PKGBUILD's own sibling *.in templates with sed (the same
+# "@NAME@" substitution packages/kuura-shell/PKGBUILD's own skel templates
+# already use for the identical reason: the active theme/distro name is only
+# known at build time). namcap's PKGBUILD checks flag any reference to the
+# PKGBUILD's own containing directory as an error wherever it occurs in the
+# file, comments included (confirmed empirically while building a sibling
+# package of this monorepo) - so that directory name is never written
+# anywhere in this file, not even to explain why, and every path below is
+# phrased relative to the build tree instead.
+build() {
+    # design/generate_sddm.py's own PROJECT_ROOT is derived from its own file
+    # location: two directories up from this PKGBUILD, inside the build
+    # container once design/ is staged there next to packages/ (see
+    # build/Containerfile). --out-dir must resolve inside that tree -
+    # generate_sddm.py enforces this itself as a path-traversal guard - so it
+    # is pointed at the build tree's own source directory, already inside it.
+    ( cd "$srcdir/../../.." && python3 -m design.generate_sddm \
+        --out-dir "$srcdir/generated" --name "$DISTRO_NAME" )
+
+    local tmp
+    tmp="$(mktemp)"
+    sed "s/@NAME@/${DISTRO_NAME}/g" "$srcdir/../metadata.desktop.in" > "$tmp"
+    cp "$tmp" "$srcdir/metadata.desktop"
+    sed "s/@NAME@/${DISTRO_NAME}/g" "$srcdir/../10-theme.conf.in" > "$tmp"
+    cp "$tmp" "$srcdir/10-theme.conf"
+    rm -f "$tmp"
+}
+
+# package(): installs the generated theme to SDDM's real, fixed theme
+# directory - confirmed real path /usr/share/sddm/themes/<name>/, the same
+# tree plasma-desktop's own Breeze theme ships under at the pinned snapshot
+# (see design/generators/sddm_theme.py's own module docstring for the live
+# research behind this and the scope decision it fed) - and wires it in as
+# the system default through the real, confirmed sddm.conf grammar: [Theme]
+# Current=<name> under /etc/sddm.conf.d/. Confirmed against sddm-kcm's own
+# real source (sddmkcm.cpp writes exactly this key, to exactly this
+# directory's own kde_settings.conf, when a person picks a theme through
+# System Settings); this package ships the same real key as a plain static
+# drop-in instead, since there is no interactive picker at package-install
+# time. This does NOT touch harness/vm/Containerfile's own
+# /etc/sddm.conf.d/10-autologin.conf - that file is test-harness-only
+# ([General]/[Autologin] sections, no [Theme] section at all) and stays
+# untouched; sddm.conf.d merges every *.conf file it finds, so this package's
+# own drop-in and the harness's autologin drop-in coexist without conflict
+# purely because their section names never overlap.
+package() {
+    local generated="$srcdir/generated"
+    local theme_dir="$pkgdir/usr/share/sddm/themes/${DISTRO_NAME}"
+
+    install -Dm644 "$generated/sddm/Main.qml" "$theme_dir/Main.qml"
+    install -Dm644 "$generated/sddm/theme.conf" "$theme_dir/theme.conf"
+    install -Dm644 "$srcdir/metadata.desktop" "$theme_dir/metadata.desktop"
+
+    install -Dm644 "$srcdir/10-theme.conf" \
+        "$pkgdir/etc/sddm.conf.d/10-theme.conf"
+}
