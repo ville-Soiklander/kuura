@@ -28,3 +28,5 @@ Versions provided by that snapshot (read from the pinned mirror with `pacman -Si
 | linux | 7.2.6.arch2-1 |
 | inter-font | 4.1-1 |
 | ttf-jetbrains-mono | 2.304-2 |
+| gtk3 | 1:3.24.52-1 |
+| gtk4 | 1:4.22.5-1 |

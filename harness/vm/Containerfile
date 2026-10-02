@@ -105,6 +105,17 @@ RUN retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -lt 4 ] || return 1; echo
 #                    View/Document/Help) unlike most GNOME-style GTK4 apps, which is
 #                    exactly what GMenuModel/org.gtk.Menus export needs something to
 #                    export in the first place.
+#   gtk4-demos       ships `gtk4-widget-factory`, the GTK4 upstream demo app used by the
+#                    `gtk4-widget-factory` state (docs/SHELL_CONTRACT.md's "GTK4/
+#                    libadwaita" section) to finally verify the gtk-4.0/gtk.css /
+#                    gtk-dark.css mechanism this project ships. Chosen specifically
+#                    because it has no libadwaita or GNOME-shell-adjacent dependency of
+#                    its own (confirmed real %DEPENDS% from the package's own `desc`
+#                    file - just cairo/gtk4/pango/wayland-level libraries), so it
+#                    isolates the plain gtk-4.0 theme CSS mechanism from the
+#                    already-proven xdg-desktop-portal mechanism rather than retesting
+#                    the same thing twice. Modest install size (~30MB), comparable to
+#                    mousepad above.
 #   appmenu-gtk-module  the GTK module that actually exports a classic GtkMenuBar
 #                    (Mousepad's kind of menu) to KDE's global-menu registrar -
 #                    confirmed live to be REQUIRED, not optional: without it, kappmenu
@@ -116,7 +127,7 @@ RUN retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -lt 4 ] || return 1; echo
 #                    guest/skel/.config/plasma-workspace/env/20-gtk-appmenu.sh.
 # --needed: packages that are already installed as dependencies are left alone.
 RUN retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -lt 4 ] || return 1; echo "retry $n of 3: $*" >&2; sleep 10; done; } \
-    && retry pacman -S --noconfirm --needed --disable-download-timeout libnotify firefox dolphin systemsettings mousepad appmenu-gtk-module \
+    && retry pacman -S --noconfirm --needed --disable-download-timeout libnotify firefox dolphin systemsettings mousepad appmenu-gtk-module gtk4-demos \
     && rm -rf /var/cache/pacman/pkg/*
 
 # The signed repository (packages, signed database, public key) is copied in, not
@@ -154,9 +165,10 @@ RUN chmod -R a+rX /srv/repo \
 # lands and this becomes a permanent part of the shipped desktop.
 
 # Fail the build early, with a clear message, if a program a state needs is missing:
-# notify-send, the browser, the file manager, System Settings, the KRunner UI and the
-# GTK text editor of the global-menu DoD's app-menu-gtk state.
-RUN for tool in notify-send firefox dolphin systemsettings krunner plasma-apply-colorscheme mousepad; do \
+# notify-send, the browser, the file manager, System Settings, the KRunner UI, the
+# GTK text editor of the global-menu DoD's app-menu-gtk state, and the GTK4 demo app
+# of the gtk4-widget-factory state (see the package comment above for why it was added).
+RUN for tool in notify-send firefox dolphin systemsettings krunner plasma-apply-colorscheme mousepad gtk4-widget-factory; do \
         test -x "/usr/bin/${tool}" || { echo "missing in the image: ${tool}" >&2; exit 1; }; \
     done
 

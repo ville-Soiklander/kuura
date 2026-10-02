@@ -27,7 +27,7 @@ rtc_base = "2026-09-25T12:00:00"
 reset = [
     { key = "escape" },
     { key = "escape" },
-    { run = ["sh", "-c", "pkill -x 'dolphin|systemsettings|firefox|mousepad'; for n in $(seq 1 60); do pgrep -x 'dolphin|systemsettings|firefox|mousepad' >/dev/null || break; sleep 0.2; done; for id in 1 2 3 4 5 6; do gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.CloseNotification \"$id\" >/dev/null 2>&1; done; true"], wait_exit = true },
+    { run = ["sh", "-c", "pkill -x 'dolphin|systemsettings|firefox|mousepad|gtk4-widget-factory'; for n in $(seq 1 60); do pgrep -x 'dolphin|systemsettings|firefox|mousepad|gtk4-widget-factory' >/dev/null || break; sleep 0.2; done; for id in 1 2 3 4 5 6; do gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.CloseNotification \"$id\" >/dev/null 2>&1; done; true"], wait_exit = true },
     { move = [1280, 700] },
 ]
 
@@ -146,5 +146,43 @@ name = "app-menu-gtk"
 description = "Test-only GTK text editor (Mousepad) focused, its own menu bar suppressed; the Global Menu widget does not show it yet (open gap, see comment above)."
 steps = [
     { run = ["mousepad", "Notes.txt"] },
+    { settle = true },
+]
+
+# Beyond the working brief's own required minimum state list (docs/HARNESS_CONTRACT.md) -
+# this project's harness already has states beyond that minimum for its own verification
+# purposes (app-menu-gtk above is exactly this kind of addition). Added to finally close
+# the long-open "does the shipped gtk-4.0/gtk.css / gtk-dark.css mechanism visibly do
+# anything" question (docs/SHELL_CONTRACT.md's "GTK4/libadwaita" section): Firefox,
+# previously the only GTK app in the test image, was confirmed to be the wrong test
+# subject (it does not render its own chrome through GTK theme CSS at all).
+# `gtk4-widget-factory` (from the `gtk4-demos` package, see harness/vm/Containerfile) is
+# a plain GTK4 upstream demo with no libadwaita/portal dependency of its own, so it
+# isolates the plain gtk-4.0 theme CSS mechanism from the already-proven
+# xdg-desktop-portal mechanism instead of retesting the same thing twice.
+#
+# OPEN, reported rather than silently worked around (mirrors the KWin decoration
+# "Known issue" and the app-menu-gtk Global Menu gap elsewhere in this project):
+# confirmed live that this state never settles within settle_timeout_s (45s), always
+# "timeout", not "never changed" -- the window itself renders correctly throughout
+# (seen in the .FAILED diagnostic the harness saves on a timeout, inspected by eye in
+# both attempts below). Two candidate causes were in play: (1) the window opens with
+# keyboard focus on its first GtkEntry, whose caret blinks, and `runner.py`'s settle
+# check is an EXACT pixel match (tolerance=0); (2) `runner.py`'s settle also requires
+# the GUEST to be CPU-quiet between polls, independent of whether pixels changed. Two
+# `tab` key presses (to move focus off the entry) were tried and made NO visible or
+# functional difference whatsoever -- same timeout, pixel-identical final frame to the
+# first attempt -- which rules out (1) and points at (2): this demo app most likely
+# keeps the (software-rendered) guest busy continuously regardless of visible change.
+# Not chased further (no per-state settle_timeout/MAX_BUSY_FRACTION override exists,
+# and loosening either globally would weaken every other state's check). Real light-
+# and dark-mode evidence for this state was instead captured directly from the
+# harness's own .FAILED diagnostic frames (see this change's own handback for paths
+# and a description of what they show) rather than from a passing golden capture.
+[[state]]
+name = "gtk4-widget-factory"
+description = "GTK4 upstream demo app exercising buttons, entries, spinbuttons, tooltips and popovers; isolates this project's shipped gtk-4.0/gtk.css and gtk-dark.css theme from the already-proven portal mechanism."
+steps = [
+    { run = ["gtk4-widget-factory"] },
     { settle = true },
 ]

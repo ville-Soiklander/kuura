@@ -13,7 +13,7 @@
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-shell"
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Desktop shell theming: panel layout, KWin tuning, shortcuts, Kvantum and GTK4 theme"
+pkgdesc="Desktop shell theming: panel layout, KWin tuning, shortcuts, Kvantum, GTK3 and GTK4 theme"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
 # Themes, configuration and scripts of the project are GPL-3.0-or-later (see LICENSE
@@ -102,6 +102,28 @@ package() {
     install -Dm644 "$generated/gtk/${DISTRO_NAME}-dark.css" \
         "$pkgdir/usr/share/themes/${DISTRO_NAME}/gtk-4.0/gtk-dark.css"
 
+    # ---- GTK3: the SAME generated files as GTK4, installed a second time under
+    # GTK3's own theme directory convention. Not a regeneration or a duplicate
+    # generator call -- build() above already runs design.generate exactly once; both
+    # install blocks read the same $generated/gtk/*.css output. Confirmed (research,
+    # not assumed) that this output is syntactically and semantically valid GTK3 CSS
+    # too, at this project's pinned GTK3 version (1:3.24.52-1, docs/VERSIONS.md): the
+    # same CSS node names used here (window, button, entry, spinbutton, tooltip, .csd,
+    # .card, @define-color, the transition shorthand) exist in both GTK3's and GTK4's
+    # own source at the matching tags. ONE known exception, harmless: `popover >
+    # contents` is GTK4-only (GTK3's popover has a single CSS node, no child to
+    # select), so that one rule is a no-op on GTK3 -- a missing corner-radius on GTK3
+    # context menus/popovers, not a parse error or any other breakage. Also worth
+    # noting: the bare `menu` selector in this same file is dead on GTK4 (GtkMenu was
+    # removed there) but alive on GTK3 (classic GtkMenu, e.g. a text editor's
+    # File/Edit dropdowns) -- so this install block makes previously-inert CSS do
+    # something real. See docs/SHELL_CONTRACT.md's "GTK4/libadwaita" section for the
+    # live re-verification this unlocks.
+    install -Dm644 "$generated/gtk/${DISTRO_NAME}-light.css" \
+        "$pkgdir/usr/share/themes/${DISTRO_NAME}/gtk-3.0/gtk.css"
+    install -Dm644 "$generated/gtk/${DISTRO_NAME}-dark.css" \
+        "$pkgdir/usr/share/themes/${DISTRO_NAME}/gtk-3.0/gtk-dark.css"
+
     # ---- Panel layout: the three generated files together, all to /etc/skel. ----
     # These install lines were MISSING before this revision -- the whole reason the V3
     # panel layout never reached a booted session (docs/SHELL_CONTRACT.md's "Panel
@@ -177,5 +199,7 @@ package() {
     install -Dm644 "$tmp" "$pkgdir/etc/skel/.config/Kvantum/kvantum.kvconfig"
     sed "s/@NAME@/${DISTRO_NAME}/g" "$skel/.config/gtk-4.0/settings.ini.in" > "$tmp"
     install -Dm644 "$tmp" "$pkgdir/etc/skel/.config/gtk-4.0/settings.ini"
+    sed "s/@NAME@/${DISTRO_NAME}/g" "$skel/.config/gtk-3.0/settings.ini.in" > "$tmp"
+    install -Dm644 "$tmp" "$pkgdir/etc/skel/.config/gtk-3.0/settings.ini"
     rm -f "$tmp"
 }

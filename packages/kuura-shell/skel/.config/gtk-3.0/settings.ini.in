@@ -1,0 +1,31 @@
+# Default GTK3 theme selection for new users -- GTK3's counterpart to the sibling
+# gtk-4.0/settings.ini.in file in this same directory tree (read that file first for
+# the fuller design-token background: light default, matching the Kvantum and
+# colour-scheme skel siblings; @NAME@ substituted by $DISTRO_NAME at package-build
+# time, same as that file -- this cannot be static data either). Installed to
+# /etc/skel/.config/gtk-3.0/settings.ini by the kuura-shell package's package()
+# (docs/SHELL_CONTRACT.md).
+#
+# gtk-theme-name / gtk-application-prefer-dark-theme are the SAME real GTK mechanism
+# on GTK3 as on GTK4 -- not assumed here, already confirmed live in this project's own
+# earlier GTK3 investigation (docs/SHELL_CONTRACT.md's "GTK4/libadwaita" section): a
+# throwaway GTK3 theme selected through exactly these two keys
+# (~/.config/gtk-3.0/settings.ini) was shown to change a real app's chrome once the
+# test subject actually rendered through GTK theme CSS (Firefox, tried first, does
+# not; see that section for the re-run with the right test subject). gtk-theme-name
+# now selects this project's own theme, which ships ONE directory holding both
+# variants (/usr/share/themes/<name>/gtk-3.0/{gtk.css,gtk-dark.css} -- the exact same
+# generated CSS file GTK4 uses, see PKGBUILD's package() comment for the install
+# layout) in place of that throwaway theme. gtk-application-prefer-dark-theme is
+# GTK's documented switch between the two; false here matches the light default.
+#
+# CAVEAT inherited from the shared CSS file (design/generators/gtk_css.py, a locked
+# interface -- not something this file can work around): one rule, `popover >
+# contents` (the corner radius on popovers/context menus), is GTK4-only syntax and is
+# a harmless no-op on GTK3 -- GTK3's popover has a single CSS node with no child to
+# select, not a parse error. Every other rule (window, button, entry, spinbutton,
+# tooltip, the bare `menu` selector -- which is actually dead on GTK4 but alive on
+# GTK3's classic GtkMenu -- and .card) applies the same as on GTK4.
+[Settings]
+gtk-theme-name=@NAME@
+gtk-application-prefer-dark-theme=false
