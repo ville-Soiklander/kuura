@@ -6,6 +6,13 @@
 # first login), so the result is reproducible from the pinned archive snapshot like
 # everything else the project ships.
 #
+# Also ships a session-wide GTK_THEME environment export (plasma-workspace/env/
+# 15-gtk-theme.sh.in below) - live verification found GTK4 apps in this image never
+# honour ~/.config/gtk-4.0/settings.ini's gtk-theme-name at all (a broken portal
+# lookup overrides it unconditionally with "Adwaita"), so without this export the
+# GTK4 theme files above are generated and installed correctly but never actually
+# load. See docs/SHELL_CONTRACT.md's "GTK4/libadwaita" section for the live evidence.
+#
 # The package name comes from the environment (DISTRO_NAME, see .env.example), the
 # same convention as kuura-desktop; building by hand without it fails with a clear
 # error. makepkg is run through build/build_repo.sh, which exports the variable.
@@ -13,7 +20,7 @@
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-shell"
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Desktop shell theming: panel layout, KWin tuning, shortcuts, Kvantum, GTK3 and GTK4 theme"
+pkgdesc="Desktop shell theming: panel layout, KWin tuning, shortcuts, Kvantum, GTK3 and GTK4 theme (plus the GTK_THEME session env fix that makes GTK4 actually load it)"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
 # Themes, configuration and scripts of the project are GPL-3.0-or-later (see LICENSE
@@ -188,7 +195,7 @@ package() {
     # real, confirmed kscreenlockerrc/org.kde.image config keys behind this.
     install -Dm644 "$skel/.config/kscreenlockerrc" "$pkgdir/etc/skel/.config/kscreenlockerrc"
 
-    # ---- skel templates: these two name the active theme, so (unlike the plain
+    # ---- skel templates: these all name the active theme, so (unlike the plain
     # skel files above) they cannot be static data -- $DISTRO_NAME is only known at
     # build time. Same idea as harness/vm/guest/templates/user-places.xbel.in's
     # @HOME@ substitution (see harness/vm/Containerfile): a plain sed replaces the
@@ -201,5 +208,16 @@ package() {
     install -Dm644 "$tmp" "$pkgdir/etc/skel/.config/gtk-4.0/settings.ini"
     sed "s/@NAME@/${DISTRO_NAME}/g" "$skel/.config/gtk-3.0/settings.ini.in" > "$tmp"
     install -Dm644 "$tmp" "$pkgdir/etc/skel/.config/gtk-3.0/settings.ini"
+    # 15-gtk-theme.sh: exports GTK_THEME=${DISTRO_NAME} for every new session (see
+    # that template's own header comment for the live-confirmed portal bug this
+    # works around). Installed mode 644, matching the three skel templates above
+    # and this project's own test-image-only env/ scripts
+    # (harness/vm/guest/skel/.config/plasma-workspace/env/) - these files are
+    # SOURCED by the Plasma session startup script (". \"\$file\"" in a loop), never
+    # executed as a separate process, so none of them need the executable bit.
+    sed "s/@NAME@/${DISTRO_NAME}/g" \
+        "$skel/.config/plasma-workspace/env/15-gtk-theme.sh.in" > "$tmp"
+    install -Dm644 "$tmp" \
+        "$pkgdir/etc/skel/.config/plasma-workspace/env/15-gtk-theme.sh"
     rm -f "$tmp"
 }

@@ -256,6 +256,159 @@ two findings above come from the harness's own `.FAILED.png` diagnostic frames, 
 directly — real evidence, just not evidence captured through the normal golden pipeline.
 See the handback for this change for the exact screenshot paths and descriptions.)
 
+**Revised (2026-10-07) — the dead-colour-tokens finding above is fixed at the code level,
+but live re-verification found a SEPARATE, deeper blocker that keeps the fix from showing
+on the one GTK4 test subject this harness has. Reported exactly as found, not rounded up.**
+
+`design/generators/gtk_css.py` (the locked interface) now additively references the
+colour tokens it already declared but never used: `*` sets `color: @token_text` (inherited
+by everything below unless overridden); `window, .csd` sets `background-color:
+@token_window`; `button`, `entry, spinbutton`, `popover > contents, menu` and `.card` each
+set `background-color: @token_surface`; `tooltip` sets its own `background-color:
+@token_tooltip_bg` / `color: @token_tooltip_text` pair. No new selectors, no new tokens —
+exactly the four kinds of rule the DoD-era finding above named as missing. `design/tests/
+test_gtk_css.py` now asserts every rule block exactly (property order included), and a new
+`test_render_real_tokens_colors_actually_referenced` test fails loudly if a future change
+ever lets a declared colour token go unused again. 851 pytest passed + 4 skipped (850+4
+before this session, one new test added here) / ruff / forbidden-terms clean.
+
+**Regression check: no visible change anywhere else.** A full `make repo` → `make
+vm-image` → capture-all-states → compare-against-the-20-approved-goldens cycle (the same
+method the previous GTK3/4 session used) found all 9 non-GTK states and `app-menu-gtk`
+still passing at effectively the same tiny tolerances as before the change (e.g.
+`app-menu-gtk` dark: 80px/0.0022%, the same caret-blink sliver already documented above,
+not a new or larger diff) — the four added `background-color`/`color` rules do not leak
+into any Qt/KDE surface anywhere in the 20 regression states.
+
+**`gtk4-widget-factory`, captured the same way as before (the `.FAILED.png` diagnostic,
+since it still never settles — see the paragraph above): window background, button fill
+and entry fill are pixel-identical between light and dark capture (`#f6f5f4` window
+background, sampled at six different empty-gutter points in both modes; `#f8f7f7`
+togglebutton; `#faf9f8` entry) — and NEITHER value is the token this change just wired up
+(`color.light.window` = `#F2F4F7`, `color.dark.window` = `#15181C`). The colour fix's own
+rules are not visibly reaching this app in the harness's normal capture, in either mode.**
+
+Investigated rather than left as an unexplained mismatch: `org.freedesktop.portal.Settings
+Read ss org.gnome.desktop.interface gtk-theme`, called live inside the guest the same way
+this document's own "Dark mode" section above already calls `Settings.ReadAll` for
+`org.freedesktop.appearance`, answers `"Adwaita"` — not `"kuura"`, regardless of
+`~/.config/gtk-4.0/settings.ini`'s `gtk-theme-name=kuura` (confirmed present and correct on
+disk, byte-for-byte the packaged file). GTK4's own documented portal integration (added so
+Wayland sessions without XSettings can still learn the configured GTK theme) consults this
+exact portal key, and appears to take priority over the local `settings.ini` value when the
+portal answers at all — `xdg-desktop-portal-kde` is the only portal backend this image
+installs (`packages/kuura-desktop/PKGBUILD`), so it is the source of this fixed `"Adwaita"`
+answer, most likely a KDE-side default/fallback for a GNOME-namespaced setting KDE has no
+native equivalent of, not anything this project's own packages configure.
+
+**Confirmatory experiment (proves the generated CSS itself is correct, and separately
+reveals a second, pre-existing scope gap):** launching `gtk4-widget-factory` with
+`GTK_THEME=kuura` forced in its environment — GTK's own documented override, which bypasses
+both `settings.ini` and the portal lookup — produced window/entry background pixels of
+EXACTLY `#f2f4f7` and `#ffffff`, this project's real `color.light.window` and
+`color.light.surface` token values, byte for byte. This confirms the generated CSS is
+semantically correct and ready to work the moment GTK4 actually loads it. The same forced
+capture also showed every button, entry and combo box rendering with **no visible border**
+at all (compare the bordered, boxy look of the normal/portal-blocked capture against the
+flat, borderless one under the forced theme) — because `gtk_css.py`'s file, by design, only
+ever supplied colour/radius/font/transition, never border declarations, which the GTK4
+default ("Adwaita") stylesheet it has been silently falling back to was supplying all
+along. This is not something this change introduced — the same gap existed, invisibly, in
+every previous version of this file — it only became visible now that a real theme file was
+forced to load as the complete stylesheet for the first time.
+
+**Resolved (2026-10-07) — the human chose, explicitly, the `GTK_THEME` env-var candidate
+named below, plus a border declaration for `gtk_css.py`; both are now shipped and
+live-verified against a real rebuilt image, with NO manual override anywhere.**
+`packages/kuura-shell/skel/.config/plasma-workspace/env/15-gtk-theme.sh.in` (templated to
+`export GTK_THEME=kuura` at package-build time, same `sed`+`mktemp` pattern as this
+package's other three skel templates) installs to `/etc/skel/.config/plasma-workspace/env/
+15-gtk-theme.sh`, sourced by the Plasma session startup script at login — the same real,
+documented GTK environment-variable override confirmed in the previous revision's forced
+experiment, now shipped as a normal product file instead of a manual test override.
+`gtk_css.py` also gained `border: 1px solid @token_separator;` on `button`, `entry,
+spinbutton`, `popover > contents, menu` and `.card` (the second gap the forced experiment
+found: these surfaces sat on the window background with no border at all).
+
+**It works — confirmed on `gtk4-widget-factory` with pixel sampling, no `GTK_THEME`
+override anywhere.** A fresh `make repo` → `make vm-image` → capture cycle (no manual
+environment tampering, just the shipped package) produced, for the first time, real
+`.png` captures of this state in both modes — it settled normally this run
+(`status: ok`, ~9–13s), unlike both previous sessions' repeated "never settles" finding;
+`harness/states.toml`'s own comment on this state should be read as "usually fails to
+settle," not "always." A full-image colour histogram (`harness.shots.pngio.read_png`,
+every 2nd pixel sampled) found, in the **light** capture: `#f2f4f7` at 71.63%
+(`color.light.window`, window background merged with the desktop's own same-coloured
+background), `#ffffff` at 9.97% (`color.light.surface`, button/entry/popover/card fill),
+and `#d5dbe3` at 1.09% (`color.light.separator`, the new border) — all three matching
+this project's real tokens byte-for-byte, no trace of the old `"Adwaita"` fallback. The
+border is real and visible, closing the second gap too.
+
+**The already-documented "static, not live dark/light toggle" limitation is confirmed to
+still hold, with exact arithmetic, not just a visual impression.** In the **dark**
+capture, `#ffffff` (surface) and `#d5dbe3` (separator) appear at the IDENTICAL sampled
+pixel counts as light (91926 and 10000 respectively, both strides) — the app's own
+button/entry/border fill is bit-for-bit unchanged between modes. `#f2f4f7` still
+dominates at 66.86% (down from 71.63%), and a new colour appears only in dark,
+`#15181c` (`color.dark.window`) at 4.77% — sampling the screen corners directly
+((10,10), (1280,10), (2550,10), well outside the app window) gives exactly `#f2f4f7` in
+light and exactly `#15181c` in dark, confirming this 4.77% is the DESKTOP background
+correctly following the live portal mechanism, while the 66.86% remaining `#f2f4f7` is
+the GTK window's OWN background still rendering light. The arithmetic closes cleanly:
+71.63% − 66.86% ≈ 4.77%, i.e. the desktop's own area in the light capture (which happens
+to share `color.light.window`'s exact value, making it indistinguishable from the GTK
+window there) is the same area that reads `#15181c` once the desktop itself goes dark.
+**Cause, as before:** `gtk-application-prefer-dark-theme=false` in
+`gtk-4.0/settings.ini` is a static key written once from `/etc/skel`, never rewritten by
+`plasma-apply-colorscheme`, so the app keeps loading `gtk.css` (not `gtk-dark.css`)
+regardless of Plasma's live mode — `GTK_THEME` fixes ACTIVATION (which theme directory
+loads at all) but does not change this separate, already-known static-default mechanism.
+A reader of this section should not assume the activation fix also made this live.
+
+**Open regression found by the same rebuild, reported rather than filed away — a real
+decision point, not resolved here.** Comparing the full capture (not just
+`gtk4-widget-factory`) against the 20 approved goldens found 3 failing states, all
+perfectly reproducible (identical pixel counts and bounding boxes across two independent
+capture runs, so none of this is capture-to-capture noise):
+
+1. **`app-menu-gtk` (mousepad, GTK3), both modes, 33.33% of pixels differing, identical
+   stats in light and dark.** Pixel sampling pinpoints it: the text-editing area's
+   background is `#eeeeec` where the approved golden has `#ffffff`. Likely cause:
+   `GTK_THEME` is a plain, long-standing GTK environment-variable override honoured by
+   GTK3 too, not just GTK4, so it now makes mousepad genuinely adopt this project's
+   theme as its sole active stylesheet,
+   the same way it does for GTK4 — but `gtk_css.py` only ever defines this project's own
+   `@token_*` names, never GTK's OWN standard named colours (`@theme_base_color`,
+   `@theme_bg_color`, etc.) that GTK's built-in default CSS uses for unstyled nodes like
+   a `GtkTextView`'s `view` node. Before this session, something left that node with a
+   sensible (white) default; now it falls back to a flat grey. Not confirmed by reading
+   GTK's own source in this session — stated as the likely mechanism, not a proven one.
+2. **`browser-window` (Firefox), both modes, ~5.3–5.6%.** The diff is confined to the
+   window's own edge/shadow and the tab-bar/address-bar text, not the page content
+   (consistent with the already-documented "Firefox's own chrome does not render through
+   system GTK theme CSS" finding for its CONTENT, but Firefox is still a GTK3-linked
+   process, so its native window border/CSD handling is a plausible `GTK_THEME` path too
+   — not confirmed).
+3. **`menubar-open`, dark mode only, 1.33%** (light passes cleanly, both capture runs).
+   This is Plasma's own Kickoff launcher — pure Qt/QML, no GTK dependency of any kind.
+   No causal mechanism tying it to this change was found; the diff pattern (nearly every
+   text label affected, solid fills mostly not) looks like a uniform sub-pixel shift
+   rather than a colour change, but the cause is unidentified.
+
+All three are shipped, uncommitted, exactly as built — this document is not recommending
+a fix or a revert, only reporting what a real rebuild with the human-approved change
+produced, including a plausible but unconfirmed mechanism for #1 and two genuinely open
+questions (#2, #3) a human should see before this goes further.
+
+(Capture methodology note: the previous revision found that capturing
+`gtk4-widget-factory` then immediately switching mode in the SAME boot made every
+following dark-mode state fail to settle. This session's regression capture again used
+two separate boots, one per mode, as a precaution — but this run `gtk4-widget-factory`
+itself settled normally in both boots (see above), so that specific interaction could not
+be re-observed one way or the other this time. Worth a line in `harness/states.toml`'s
+own comments if `gtk4-widget-factory` is ever reordered to not be the last state before a
+mode switch.)
+
 ## Panel layout generator: `design/generators/plasma_layout.py`
 
 A fifth generator alongside the four from V1 (`plasma_colors.py`, `kvantum.py`,

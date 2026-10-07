@@ -92,25 +92,62 @@ class TestGtkCssRender:
         assert "font-size: 13px" in result
         assert "font-weight: 400" in result
 
-        # Verify border-radius values
-        assert "window, .csd" in result
-        assert "border-radius: 14px" in result
-        assert "button {" in result
-        assert "border-radius: 8px" in result
-        assert "entry, spinbutton" in result
-        assert "border-radius: 8px" in result
-        assert "tooltip {" in result
-        assert "border-radius: 8px" in result
-        assert "popover > contents, menu {" in result
-        assert "border-radius: 10px" in result
-        assert ".card {" in result
-        assert "border-radius: 12px" in result
-
-        # Verify motion values
-        assert "transition: all 180ms cubic-bezier(0.32, 0.72, 0, 1)" in result
-
-        # Verify padding (spacing.grid=4, so grid*3=12)
-        assert "padding: 4px 12px" in result
+        # REVISED (2026-10): colour tokens must now actually be referenced by a
+        # rule, not just declared via @define-color - this is the whole point
+        # of the fix (see gtk_css.py module docstring, "REVISED" section).
+        # Assert each rule block EXACTLY, including property order, so a
+        # regression (wrong order, missing line, wrong token) is caught.
+        assert (
+            "* {\n"
+            '  font-family: "TestFont";\n'
+            "  font-size: 13px;\n"
+            "  font-weight: 400;\n"
+            "  color: @token_text;\n"
+            "}\n"
+        ) in result
+        assert (
+            "window, .csd {\n"
+            "  background-color: @token_window;\n"
+            "  border-radius: 14px;\n"
+            "}\n"
+        ) in result
+        assert (
+            "button {\n"
+            "  background-color: @token_surface;\n"
+            "  border: 1px solid @token_separator;\n"
+            "  border-radius: 8px;\n"
+            "  padding: 4px 12px;\n"
+            "  transition: all 180ms cubic-bezier(0.32, 0.72, 0, 1);\n"
+            "}\n"
+        ) in result
+        assert (
+            "entry, spinbutton {\n"
+            "  background-color: @token_surface;\n"
+            "  border: 1px solid @token_separator;\n"
+            "  border-radius: 8px;\n"
+            "}\n"
+        ) in result
+        assert (
+            "tooltip {\n"
+            "  background-color: @token_tooltip_bg;\n"
+            "  color: @token_tooltip_text;\n"
+            "  border-radius: 8px;\n"
+            "}\n"
+        ) in result
+        assert (
+            "popover > contents, menu {\n"
+            "  background-color: @token_surface;\n"
+            "  border: 1px solid @token_separator;\n"
+            "  border-radius: 10px;\n"
+            "}\n"
+        ) in result
+        assert (
+            ".card {\n"
+            "  background-color: @token_surface;\n"
+            "  border: 1px solid @token_separator;\n"
+            "  border-radius: 12px;\n"
+            "}\n"
+        ) in result
 
         # Verify ends with exactly one newline
         assert result.endswith("\n")
@@ -176,6 +213,66 @@ class TestGtkCssRender:
         # Verify header specifies dark mode
         assert "/* TestTheme dark - generated from design tokens, do not edit. */" in result
 
+        # Dark mode uses the SAME @token_* names as light mode (only the
+        # @define-color VALUES differ) - verify the rule blocks reference
+        # them exactly as the revised spec requires.
+        assert (
+            "* {\n"
+            '  font-family: "TestFont";\n'
+            "  font-size: 13px;\n"
+            "  font-weight: 400;\n"
+            "  color: @token_text;\n"
+            "}\n"
+        ) in result
+        assert (
+            "window, .csd {\n"
+            "  background-color: @token_window;\n"
+            "  border-radius: 14px;\n"
+            "}\n"
+        ) in result
+        assert (
+            "button {\n"
+            "  background-color: @token_surface;\n"
+            "  border: 1px solid @token_separator;\n"
+            "  border-radius: 8px;\n"
+            "  padding: 4px 12px;\n"
+            "  transition: all 180ms cubic-bezier(0.32, 0.72, 0, 1);\n"
+            "}\n"
+        ) in result
+        assert (
+            "entry, spinbutton {\n"
+            "  background-color: @token_surface;\n"
+            "  border: 1px solid @token_separator;\n"
+            "  border-radius: 8px;\n"
+            "}\n"
+        ) in result
+        assert (
+            "tooltip {\n"
+            "  background-color: @token_tooltip_bg;\n"
+            "  color: @token_tooltip_text;\n"
+            "  border-radius: 8px;\n"
+            "}\n"
+        ) in result
+        assert (
+            "popover > contents, menu {\n"
+            "  background-color: @token_surface;\n"
+            "  border: 1px solid @token_separator;\n"
+            "  border-radius: 10px;\n"
+            "}\n"
+        ) in result
+        assert (
+            ".card {\n"
+            "  background-color: @token_surface;\n"
+            "  border: 1px solid @token_separator;\n"
+            "  border-radius: 12px;\n"
+            "}\n"
+        ) in result
+
+        # @define-color token_window uses the DARK value, not the light one -
+        # catches a mode mix-up bug.
+        assert "@define-color token_window #040506;" in result
+        assert "@define-color token_window #010203;" not in result
+
         # Verify ends with exactly one newline
         assert result.endswith("\n")
         assert not result.endswith("\n\n")
@@ -200,6 +297,40 @@ class TestGtkCssRender:
         # Verify ends with exactly one newline
         assert result1.endswith("\n")
         assert not result1.endswith("\n\n")
+
+    def test_render_real_tokens_colors_actually_referenced(self):
+        """
+        Regression test for the colour-gap bug: with the REAL tokens.json,
+        every @define-color this generator declares for window/surface/text/
+        tooltip_bg/tooltip_text must be referenced by at least one CSS rule
+        (not just declared and left unused, which was the bug fixed in
+        2026-10 - see gtk_css.py module docstring). Also covers the follow-up
+        border-gap fix (2026-10-07): `separator` must be referenced too, not
+        just declared.
+        """
+        from design.validate import load_tokens
+
+        tokens_path = Path(__file__).parent.parent / "tokens.json"
+        tokens = load_tokens(tokens_path)
+
+        for mode in ("light", "dark"):
+            result = render(tokens, mode=mode, name="Theme")
+
+            # Each of these exact "property: @token_*;" lines must appear in
+            # a CSS rule body - i.e. the token is actually consumed, not just
+            # declared via @define-color and left dangling.
+            for reference in (
+                "color: @token_text;",
+                "background-color: @token_window;",
+                "background-color: @token_surface;",
+                "background-color: @token_tooltip_bg;",
+                "color: @token_tooltip_text;",
+                "border: 1px solid @token_separator;",
+            ):
+                assert reference in result, (
+                    f"Expected colour reference {reference!r} missing in {mode} mode - "
+                    "this is the exact regression the 2026-10 fix addresses"
+                )
 
     def test_render_changing_token_changes_output(self, tmp_path):
         """Test that changing a color token changes the output."""

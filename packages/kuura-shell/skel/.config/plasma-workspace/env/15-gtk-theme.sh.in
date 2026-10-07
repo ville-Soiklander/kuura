@@ -1,0 +1,32 @@
+#!/bin/sh
+# Sourced by the Plasma session at start-up (before KWin), the same real,
+# documented mechanism this project's own harness-only
+# 20-gtk-appmenu.sh/10-vm-rendering.sh scripts already use (see
+# harness/vm/guest/skel/.config/plasma-workspace/env/ - those two are
+# TEST-IMAGE ONLY, never shipped to a real install; this file is the
+# opposite, a REAL product file, shipped by this package to every new
+# account, which is why it lives here and not there).
+#
+# WHY this file exists at all: confirmed live (docs/SHELL_CONTRACT.md's
+# "GTK4/libadwaita" section, "Revised 2026-10-07") that GTK4 apps in this
+# image do NOT honour ~/.config/gtk-4.0/settings.ini's gtk-theme-name under
+# normal conditions - org.freedesktop.portal.Settings's
+# org.gnome.desktop.interface/gtk-theme answers "Adwaita" unconditionally
+# (xdg-desktop-portal-kde is the only portal backend this project installs,
+# and its Settings implementation does not forward settings.ini's value),
+# which GTK4's own portal integration consults ahead of the local file. The
+# generated theme itself was confirmed correct in isolation (forcing
+# GTK_THEME in the environment produced exactly this project's own token
+# colours, byte for byte) - only ACTIVATION was broken, not the theme file.
+#
+# GTK_THEME is GTK's own documented environment-variable override: set, it
+# bypasses BOTH settings.ini and the portal lookup unconditionally (same
+# real mechanism used to confirm the fix above), so exporting it here for
+# every session is a real, direct fix for the real, confirmed cause - not a
+# workaround for a symptom. @NAME@ is substituted with $DISTRO_NAME at
+# package-build time by this package's own PKGBUILD (same sed+mktemp
+# pattern already used for the gtk-3.0/gtk-4.0 settings.ini.in templates
+# and Kvantum/kvantum.kvconfig.in in the same package) - this cannot be
+# static data, the theme directory name it must match
+# (/usr/share/themes/@NAME@/gtk-4.0/) is only known at build time.
+export GTK_THEME=@NAME@
