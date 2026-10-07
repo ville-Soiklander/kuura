@@ -125,9 +125,21 @@ RUN retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -lt 4 ] || return 1; echo
 #                    `busctl` output alone can look like something worked. Loaded via
 #                    GTK_MODULES=appmenu-gtk-module, see
 #                    guest/skel/.config/plasma-workspace/env/20-gtk-appmenu.sh.
+#   chromium         verification-only addition for the Vaihe 6 Chromium investigation
+#                    (docs/SHELL_CONTRACT.md's own "verify, don't guess" rule): Chromium's
+#                    real source (ui/linux/linux_ui_factory.cc) maps the KDE desktop to
+#                    its Qt native-theme backend rather than GTK, which this image's
+#                    Kvantum/portal mechanism (already shipped and verified live, see
+#                    packages/kuura-shell and the "Dark mode" section of
+#                    docs/SHELL_CONTRACT.md) may already satisfy with no bespoke
+#                    kuura-chromium package at all. Installed here, exactly like
+#                    gtk4-demos above, ONLY to let this test image confirm or refute that
+#                    prediction empirically before any packaging decision is made - not
+#                    wired into kuura-desktop's depends. Large (~442.7 MB installed);
+#                    budget extra build time for it.
 # --needed: packages that are already installed as dependencies are left alone.
 RUN retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -lt 4 ] || return 1; echo "retry $n of 3: $*" >&2; sleep 10; done; } \
-    && retry pacman -S --noconfirm --needed --disable-download-timeout libnotify firefox dolphin systemsettings mousepad appmenu-gtk-module gtk4-demos \
+    && retry pacman -S --noconfirm --needed --disable-download-timeout libnotify firefox dolphin systemsettings mousepad appmenu-gtk-module gtk4-demos chromium \
     && rm -rf /var/cache/pacman/pkg/*
 
 # The signed repository (packages, signed database, public key) is copied in, not
@@ -166,9 +178,10 @@ RUN chmod -R a+rX /srv/repo \
 
 # Fail the build early, with a clear message, if a program a state needs is missing:
 # notify-send, the browser, the file manager, System Settings, the KRunner UI, the
-# GTK text editor of the global-menu DoD's app-menu-gtk state, and the GTK4 demo app
-# of the gtk4-widget-factory state (see the package comment above for why it was added).
-RUN for tool in notify-send firefox dolphin systemsettings krunner plasma-apply-colorscheme mousepad gtk4-widget-factory; do \
+# GTK text editor of the global-menu DoD's app-menu-gtk state, the GTK4 demo app of the
+# gtk4-widget-factory state, and chromium (the verification-only addition above; see
+# its own comment for why).
+RUN for tool in notify-send firefox dolphin systemsettings krunner plasma-apply-colorscheme mousepad gtk4-widget-factory chromium; do \
         test -x "/usr/bin/${tool}" || { echo "missing in the image: ${tool}" >&2; exit 1; }; \
     done
 

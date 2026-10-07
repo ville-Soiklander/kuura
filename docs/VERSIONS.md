@@ -30,3 +30,4 @@ Versions provided by that snapshot (read from the pinned mirror with `pacman -Si
 | ttf-jetbrains-mono | 2.304-2 |
 | gtk3 | 1:3.24.52-1 |
 | gtk4 | 1:4.22.5-1 |
+| chromium | 153.0.8010.52-1 |

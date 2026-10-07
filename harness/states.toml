@@ -24,10 +24,58 @@ rtc_base = "2026-09-25T12:00:00"
 #      notification (the ids restart at 1 in a fresh session, so a small range is enough)
 #   3. park the pointer on the bare desktop, away from every panel icon (a tooltip or
 #      hover highlight left behind would leak into the next state)
+#
+# Root-caused 2026-10-07 (Vaihe 6 Chromium investigation, three passes - the real
+# cause, not the first two guesses): this step used `pkill -x`/`pgrep -x`, which match
+# against the kernel's own `comm` field (`/proc/<pid>/comm`), NOT the full command
+# line - and the kernel truncates `comm` to 15 characters (`TASK_COMM_LEN - 1`).
+# `gtk4-widget-factory` is 19 characters, so its real `comm` is the truncated
+# `gtk4-widget-fac` - which the 19-character name in this pattern can never equal
+# under `-x`'s exact-match semantics. Confirmed live, directly, not inferred: against
+# a guest running only gtk4-widget-factory, `pkill -9 -x 'dolphin|...|
+# gtk4-widget-factory|...'` exits 1 (nothing matched), while `pgrep -f
+# gtk4-widget-factory` confirms the real process is still very much alive - and stays
+# alive, byte-identical screenshots (same sha256) for a full 25 seconds, because
+# nothing ever signals it. Every OTHER name in the pattern (dolphin=7, mousepad=8,
+# firefox=8, chromium=8, systemsettings=14 characters) stays under the 15-char limit,
+# which is exactly why gtk4-widget-factory was the only state that ever corrupted a
+# later capture - it is not a Chromium-caused slowdown and no amount of waiting fixes
+# it, because the process was never actually sent a signal at all, in any earlier
+# session's version of this step either. The stale window observed in later states IS
+# this same still-running instance's own real window, confirmed by a control test:
+# a correctly-matched `pkill -9 -x mousepad` kills mousepad and its window is gone
+# within half a second, no lingering frame - so a SIGKILL'd client does disappear
+# immediately in this image once it is actually signalled.
+#
+# The fix is `-f` (match the full command line, immune to comm truncation) in place
+# of `-x` everywhere in this step, confirmed live: `pkill -9 -f gtk4-widget-factory`
+# against the same stuck process succeeds and the process is gone. The 2026-10-07
+# earlier-same-day hardening (SIGKILL instead of the default signal, a longer 20s
+# wait, and - most valuably - actually checking afterward and failing loudly instead
+# of an unconditional `true`) stays: it was reasoned from a wrong hypothesis (a slow
+# guest, not a kill that silently never happens) and could never have fixed this
+# specific bug by itself, but the loud-failure-on-survival check is still correct,
+# useful defensive engineering in its own right - it just could not fire on an account
+# that `-x` can never even see, alive or dead. Keeping it alongside the real `-f` fix
+# means a FUTURE real survivor (for a genuinely slow kill, not a naming mismatch)
+# still fails loudly instead of corrupting a capture silently.
+#
+# SELF-MATCH TRAP, found and fixed in the same pass: a naive `pkill -9 -f 'dolphin|...
+# |chromium'` matches not only the real target programs but ALSO the `sh -c "..."`
+# process running this very script, because that process's own command line (the `-c`
+# argument) literally contains this pattern's text as a substring. `pkill -9` then
+# SIGKILLs its own parent shell before it can reach the wait loop at all - every state
+# failed identically and immediately (~1s, not the up-to-20s the wait allows) the first
+# time this was tried with plain `-f`, confirming this exact mechanism, not a timing
+# issue. Fixed with the standard, well-known trick for this trap: bracket one letter
+# of each alternative (`[d]olphin`, `[f]irefox`, ...) - as a regex this still matches
+# the real processes' plain "dolphin"/"firefox"/... text normally, but it can no
+# longer match this script's OWN command line, which contains the bracketed form
+# "[d]olphin" literally, not the plain "dolphin" substring the regex requires.
 reset = [
     { key = "escape" },
     { key = "escape" },
-    { run = ["sh", "-c", "pkill -x 'dolphin|systemsettings|firefox|mousepad|gtk4-widget-factory'; for n in $(seq 1 60); do pgrep -x 'dolphin|systemsettings|firefox|mousepad|gtk4-widget-factory' >/dev/null || break; sleep 0.2; done; for id in 1 2 3 4 5 6; do gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.CloseNotification \"$id\" >/dev/null 2>&1; done; true"], wait_exit = true },
+    { run = ["sh", "-c", "pkill -9 -f '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium'; for n in $(seq 1 100); do pgrep -f '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium' >/dev/null || break; sleep 0.2; done; if pgrep -f '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium' >/dev/null; then echo \"reset: still running after 20s: $(pgrep -f -l '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium')\" >&2; exit 1; fi; for id in 1 2 3 4 5 6; do gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.CloseNotification \"$id\" >/dev/null 2>&1; done; true"], wait_exit = true },
     { move = [1280, 700] },
 ]
 

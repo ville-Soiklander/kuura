@@ -26,5 +26,9 @@ Notes:
   entry needed here. Human sign-off (Vaihe 5's own DoD) was given 2026-09-30
   after visual/descriptive review of the generated output. Packaged by
   `packages/kuura-assets/PKGBUILD`, whose own SCOPE comment documents exactly
-  which parts (icon-theme `index.theme`, sound-theme wiring) are installed at
-  a minimal, not-yet-live-verified level.
+  what is installed: an icon theme (including the "systray" glyph, under
+  this project's own namespaced name, in the Icon Theme Specification's
+  "Status" context - still with no first-party consumer) and both a flat
+  plain-file sound install and a real freedesktop sound-theme-spec theme
+  (event-name mapping, one approximated name) - and what, if anything,
+  remains genuinely unverified rather than merely unclaimed.

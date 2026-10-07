@@ -9,22 +9,66 @@
 # fails with a clear error. makepkg is run through build/build_repo.sh, which
 # exports the variable.
 #
-# SCOPE (a deliberate, documented boundary, not an oversight): this package
-# installs the icon set as a MINIMAL icon theme (index.theme + real
-# icon-naming-spec names, Inherits=breeze so every icon this theme does not
-# override still resolves) rather than a fully live-verified integration -
-# unlike this project's Kvantum/GTK4 install layout (packages/kuura-shell/
-# PKGBUILD's own package(), see its comments), the exact names/paths below
-# were NOT confirmed against a real booted session before this package first
-# shipped. Two things are intentionally left out for the same reason: (1) the
-# "systray" glyph (design/icons/glyphs.py) is generated but NOT installed
-# here - there is no single correct freedesktop icon-naming-spec name for a
-# generic status-tray icon, it depends on which specific status a theme wants
-# to override, which this project has not yet decided; (2) the UI sounds are
-# installed as plain files, not wired into a freedesktop sound-theme-spec
-# index.theme (no event->file mapping) - KDE's notification sound picker will
-# not offer them automatically yet. Revisit both with a real guest-image boot
-# test before relying on either being visually/audibly active by default.
+# SCOPE: this package installs the icon set as a MINIMAL icon theme
+# (index.theme + real icon-naming-spec names, Inherits=breeze so every icon
+# this theme does not override still resolves), and the UI sounds BOTH as
+# plain files AND, additively, as a real freedesktop sound-theme-spec theme
+# (index.theme + per-event WAV files under stereo/<context>/ - see
+# package()'s own comments for the exact generated-file -> standard-event-
+# name mapping and the one approximated name).
+#
+# Two gaps this file used to document as entirely open are now closed, each
+# to a different degree:
+# (1) the "systray" glyph (design/icons/glyphs.py) IS now installed, under
+# this project's OWN namespaced icon name in the spec's real "Status"
+# context (see package()'s own comment at the install line). This still has
+# NO consumer: no kuura component registers a StatusNotifierItem today, so
+# this only gives a future first-party status indicator a real, already-
+# installed icon to reference by name, instead of leaving the glyph dark.
+# Do not read this as "wired into something" - nothing looks the name up yet.
+# (2) the UI sounds ARE now wired into a real sound-theme-spec index.theme
+# with an event-name mapping, in addition to (not instead of) the existing
+# plain-file install. The mapping, the spec fields used and the one
+# intentionally approximated event name (success.wav -> complete-copy, see
+# package()'s own comment) were confirmed against the real, fetched
+# sound-theme-spec and sound-naming-spec text, not guessed.
+#
+# What was independently LIVE-verified in a booted guest image before this
+# package shipped with these two additions (real boot, not just a built
+# package's file listing):
+# - The systray SVG and all 8 themed WAVs exist at their exact installed
+#   paths and are valid content (`file`/content inspection in the running
+#   guest: real SVG, real 16-bit PCM WAV, not empty/corrupt).
+# - libcanberra - a real implementation of the XDG Sound Theme Specification
+#   (confirmed from its own package description and from strings in its
+#   .so: `canberra.xdg-theme.name`, `sound-theme-spec.c`,
+#   `%s/sounds/%s/index.theme`, the literal fallback name `freedesktop`) -
+#   is a HARD dependency of knotifications/knotifyconfig/kwin/
+#   plasma-desktop/plasma-pa/plasma-workspace on this image, not an optional
+#   add-on. `/usr/share/sounds` on the booted guest lists `kuura` as a real,
+#   discoverable theme alongside `freedesktop` and `ocean`.
+# - A dedicated System Settings module, kcm_soundtheme ("Select a Sound
+#   Theme for Notifications"), exists specifically to let a user pick the
+#   active theme by name from that same directory; its own strings show it
+#   enumerates/installs themes and sets `canberra.xdg-theme.name`.
+# - KDE's own shipped notifyrc files (e.g. plasma_workspace.notifyrc)
+#   already reference real sound-naming-spec event names - three of them
+#   (trash-empty, desktop-login, dialog-error) are the EXACT names three of
+#   this package's own sounds are mapped to above.
+# Taken together this is real, mechanism-level evidence that KDE's own
+# notification sound path is NOT a separate, disconnected system from the
+# XDG sound-theme machinery this package now populates - it runs through
+# the same libcanberra lookup. What this pass did NOT establish: nothing on
+# this image currently selects "kuura" as the ACTIVE sound theme (no
+# [Sounds]/Theme= key anywhere in system or user config - expected, that is
+# a user choice this package does not and should not force), and an actual
+# forced-theme playback test (`canberra-gtk-play --theme=kuura ...`) could
+# not be completed - that flag does not exist in the installed libcanberra
+# 0.30 CLI, and this harness VM has no audio device configured at all
+# (harness/shots/vm.py's QEMU command line), so even a successful lookup
+# would not be audible. Selecting kuura as the default theme, if ever
+# wanted, is a separate, later decision (likely packages/kuura-lookandfeel),
+# not something this packaging-only change makes.
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-assets"
 pkgver=0.1.0
@@ -75,8 +119,7 @@ package() {
 
     # ---- Icons: real freedesktop icon-naming-spec names, one context
     # subdirectory per icon (apps/places/mimetypes - the spec's own division,
-    # not this project's invention). "systray" is deliberately NOT installed
-    # (see SCOPE above). ----
+    # not this project's invention). ----
     install -Dm644 "$icons/file_manager.svg" \
         "$theme_dir/scalable/apps/system-file-manager.svg"
     install -Dm644 "$icons/settings.svg" \
@@ -96,6 +139,21 @@ package() {
     install -Dm644 "$icons/file_code.svg" \
         "$theme_dir/scalable/mimetypes/text-x-script.svg"
 
+    # "systray" has NO consumer in this project today - no kuura component
+    # registers a StatusNotifierItem, and the Icon Theme Specification has
+    # no single predefined name for a generic status-tray icon (the exact
+    # name depends on which specific status a future indicator wants to
+    # override, which this project has not decided). It is installed anyway,
+    # under this project's OWN namespaced name, in the spec's real "Status"
+    # context (the same kind of context division apps/places/mimetypes above
+    # already follow; the spec explicitly allows names beyond its predefined
+    # list) - so a future first-party status indicator has a real, valid,
+    # already-installed icon to reference by name instead of a dark glyph.
+    # This is namespacing ahead of need, not wiring: nothing looks this name
+    # up yet.
+    install -Dm644 "$icons/systray.svg" \
+        "$theme_dir/scalable/status/${DISTRO_NAME}-tray.svg"
+
     # index.theme: the minimal real fields a freedesktop icon theme needs
     # (Icon Theme Specification: [Icon Theme] Name/Comment/Inherits/
     # Directories, one [<subdir>] section per Directories entry giving its
@@ -107,7 +165,7 @@ package() {
 Name=${DISTRO_NAME}
 Comment=Icon set generated from ${DISTRO_NAME}'s own design tokens
 Inherits=breeze
-Directories=scalable/apps,scalable/places,scalable/mimetypes
+Directories=scalable/apps,scalable/places,scalable/mimetypes,scalable/status
 
 [scalable/apps]
 Size=48
@@ -123,6 +181,11 @@ Context=Places
 Size=48
 Type=Scalable
 Context=MimeTypes
+
+[scalable/status]
+Size=48
+Type=Scalable
+Context=Status
 EOF
 
     # ---- Wallpapers: plain PNGs under a standard, widely-recognised
@@ -135,11 +198,100 @@ EOF
         install -Dm644 "$f" "$wallpaper_dir/$(basename "$f")"
     done
 
-    # ---- Sounds: plain WAVs under a real, standard sound-asset location
-    # (not yet a freedesktop sound-theme-spec index.theme - see SCOPE
-    # above). ----
+    # ---- Sounds: plain WAVs under a real, standard sound-asset location.
+    # Kept alongside the sound-theme install below (not replaced by it):
+    # this flat layout, under this project's own internal file stems, is a
+    # real, already-working location some things might already reference. ----
     local sound_dir="$pkgdir/usr/share/sounds/${DISTRO_NAME}"
     for f in "$sounds"/*.wav; do
         install -Dm644 "$f" "$sound_dir/$(basename "$f")"
     done
+
+    # ---- Sound theme (freedesktop sound-theme-spec), ADDITIVE to the plain
+    # files above, not instead of them: the same theme name/directory as the
+    # icon theme (${DISTRO_NAME}), with its own index.theme, and each sound
+    # installed a SECOND time under the real sound-naming-spec event name it
+    # matches, inside an output-profile/context subdirectory. Directory
+    # names may be several levels deep and are not a sound namespace
+    # (confirmed from the real spec text: Context "doesn't act as a
+    # namespace in the file system... but allows implementations to
+    # categorize and sort by it" - so each [section] below needs its own,
+    # unambiguous Context, hence one stereo/<context> subdirectory per
+    # Context actually used here, matching the spec's own worked example of
+    # a multi-level directory name such as "stereo/alerts").
+    #
+    # Fields confirmed against the real, fetched sound-theme-spec text, not
+    # guessed: [Sound Theme] requires Name/Comment/Directories; Inherits is
+    # optional and defaults to "freedesktop" when omitted (set explicitly
+    # here anyway, for clarity); each directory's Context is one of
+    # Alert/Notification/Support/Game, and OutputProfile is a profile LABEL
+    # ("stereo" or "5.1", or "any other output configuration" per the spec),
+    # not a literal channel-count requirement - the spec's own file-format
+    # rule ("WAV/PCM 8-48kHz, 8/16 bits") never mentions channel count, and
+    # "all implementations are required to fall back to the stereo output
+    # profile as last resort" is exactly why "stereo" is the correct profile
+    # label here even though these files are mono.
+    #
+    # Generated file -> standard sound-naming-spec event name (Context):
+    #   click.wav              -> button-pressed.wav      (Support)
+    #   volume_tick.wav         -> audio-volume-change.wav (Support)
+    #   menu_tick.wav           -> menu-popup.wav          (Support)
+    #   screenshot_shutter.wav  -> screen-capture.wav      (Support)
+    #   trash_delete.wav        -> trash-empty.wav         (Support)
+    #   error.wav               -> dialog-error.wav        (Alert)
+    #   success.wav             -> complete-copy.wav       (Notification)
+    #   login_chime.wav         -> desktop-login.wav       (Notification)
+    # "Support" (sound-theme-spec's own wording: "sounds that give the user
+    # feedback on their actions") is the closest sound-theme-spec Context to
+    # sound-naming-spec's separate "Actions"/"Input Feedback" categories,
+    # which is where most of these event names come from.
+    #
+    # success.wav -> complete-copy.wav is an APPROXIMATION, not an exact
+    # match: sound-naming-spec has no single generic "action succeeded"
+    # name - complete-copy/complete-download/complete-scan are all "a
+    # specific thing finished" names, and complete-copy is the best
+    # available single representative. Flagged here rather than presented
+    # as exact, the same way other approximations in this project are
+    # documented.
+    #
+    # menu_tick.wav is installed only as menu-popup.wav, not duplicated as
+    # menu-popdown.wav: this project generates ONE tick for both menu open
+    # and close, and installing the identical file under both names would
+    # imply two distinct cues exist when they do not.
+    cat > "$sound_dir/index.theme" << EOF
+[Sound Theme]
+Name=${DISTRO_NAME}
+Comment=UI sounds synthesized from ${DISTRO_NAME}'s own design tokens
+Inherits=freedesktop
+Directories=stereo/support,stereo/alert,stereo/notification
+
+[stereo/support]
+Context=Support
+OutputProfile=stereo
+
+[stereo/alert]
+Context=Alert
+OutputProfile=stereo
+
+[stereo/notification]
+Context=Notification
+OutputProfile=stereo
+EOF
+
+    install -Dm644 "$sounds/click.wav" \
+        "$sound_dir/stereo/support/button-pressed.wav"
+    install -Dm644 "$sounds/volume_tick.wav" \
+        "$sound_dir/stereo/support/audio-volume-change.wav"
+    install -Dm644 "$sounds/menu_tick.wav" \
+        "$sound_dir/stereo/support/menu-popup.wav"
+    install -Dm644 "$sounds/screenshot_shutter.wav" \
+        "$sound_dir/stereo/support/screen-capture.wav"
+    install -Dm644 "$sounds/trash_delete.wav" \
+        "$sound_dir/stereo/support/trash-empty.wav"
+    install -Dm644 "$sounds/error.wav" \
+        "$sound_dir/stereo/alert/dialog-error.wav"
+    install -Dm644 "$sounds/success.wav" \
+        "$sound_dir/stereo/notification/complete-copy.wav"
+    install -Dm644 "$sounds/login_chime.wav" \
+        "$sound_dir/stereo/notification/desktop-login.wav"
 }

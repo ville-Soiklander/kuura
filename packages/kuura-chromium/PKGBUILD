@@ -1,0 +1,121 @@
+# Chromium integration: a system-wide managed-policy file that turns off
+# anonymous usage/crash reporting and the "set as default browser" nag (Vaihe 6
+# of the working brief, "Sovellustason viimeistely", the Chromium sub-task,
+# opened by the same investigation that found the harness's dark-mode
+# regression below). Ships no upstream source, like every other package of
+# this monorepo; built from this repository itself.
+#
+# WHY THIS PACKAGE IS THIS SIMPLE - no design/generators/ module, no theme
+# files, unlike kuura-firefox/kuura-sddm/kuura-lookandfeel: a live
+# verification pass in this project's own real test image (no manual
+# overrides) CONFIRMED that Chromium's own colour theming already comes for
+# free through this project's existing Qt/Kvantum pipeline, so there is
+# nothing left for a generator to produce.
+#   - Chromium's real source (`ui/linux/linux_ui_factory.cc`) maps a KDE
+#     Plasma desktop to its Qt native-theme backend, not GTK - it samples the
+#     active Qt QStyle (Kvantum, shipped and working since this project's
+#     V3/V4 work), never gtk-4.0/gtk.css.
+#   - `busctl --user call org.freedesktop.portal.Desktop ...
+#     org.freedesktop.portal.Settings ReadAll as 1 org.freedesktop.appearance`
+#     returns an `accent-color` key matching design/tokens.json's
+#     color.light.accent / color.dark.accent EXACTLY, byte for byte, in both
+#     modes (cross-checked against the live Kvantum .kvconfig files too).
+#   - Real screenshots, pixel-sampled with PIL rather than eyeballed, show
+#     Chromium's own chrome (omnibox selection colour, toolbar/tab-strip
+#     background) displaying the exact token colours in both modes and
+#     switching correctly between them.
+#   - The window frame/titlebar is the SAME already-documented generic KWin
+#     SSD fallback every other app in this image gets - see
+#     docs/SHELL_CONTRACT.md's "Known issue: KWin decoration does not render
+#     Breeze KDecoration3 chrome" section - NOT a Chromium-specific gap.
+#   - Chromium's own menu bar IS correctly exported to and rendered by KDE's
+#     Global Menu panel widget (an unplanned bonus finding, opposite of the
+#     already-documented GTK/Mousepad global-menu gap elsewhere in this
+#     project).
+#
+# POLICY KEYS - both confirmed real from Chromium's own source at
+# https://chromium.googlesource.com/chromium/src/+/main/components/policy/
+# resources/templates/policy_definitions/Miscellaneous/<Name>.yaml, at or
+# before this project's pinned version (153), not guessed:
+#   - MetricsReportingEnabled (boolean): controls anonymous usage/crash
+#     reporting; false disables it and removes the user's own control of the
+#     setting. Supported since chrome.* version 8.
+#   - DefaultBrowserSettingEnabled (boolean): false "stops Chrome from ever
+#     checking if it's the default and turns user controls off for this
+#     option." Left unset (null) it is user-controlled; this package pins it.
+# No other policy key is shipped - anything not independently confirmed this
+# same way (e.g. first-run promotional tabs) is deliberately left out rather
+# than guessed, per this project's own "verify, don't guess" rule.
+#
+# policies.json has no comments of its own: Chromium's managed-policy JSON
+# format, unlike Firefox's policies.json (see kuura-firefox's own file),
+# does not support them - the two keys are explained here instead.
+#
+# initial_preferences (Chromium's first-run profile seeding, the equivalent
+# of kuura-firefox's preinstalled profiles.ini) is explicitly OUT OF SCOPE of
+# this package - flagged by the same investigation as a separate, not-yet-
+# verified sub-task; do not assume it behaves like Firefox's profile seeding
+# without dedicated investigation.
+#
+# OPEN, DELIBERATE DECISION - NOT wired into kuura-desktop's own `depends` by
+# this change, mirroring how kuura-sddm and kuura-lookandfeel documented this
+# same open question before their own later, separate verification passes got
+# them wired in (see packages/kuura-desktop/PKGBUILD's own comment next to
+# each). Chromium is currently a dependency of the SCREENSHOT HARNESS's own
+# test image only (harness/vm/Containerfile), not of anything this monorepo
+# actually ships - adding `depends=('chromium')` below makes this package
+# (and therefore Chromium) real and buildable, but does NOT by itself change
+# what a real install of the metapackage pulls in, because nothing currently
+# names this package in kuura-desktop's own `depends`. Whether to add
+# "${DISTRO_NAME}-chromium" there is a real product decision (every install
+# gains a second, very large browser dependency alongside Firefox) and is
+# intentionally left for a human to make explicitly. Do not add it silently
+# while touching this file for something else.
+#
+# SEPARATE, HARNESS-ONLY FINDING (not this package's own doing, but the
+# investigation that produced this package also found it): merely having
+# `chromium` installed in the screenshot harness's test image made its
+# existing dark-mode regression capture unreliable - see
+# harness/states.toml's own `reset` step header comment for the root cause
+# and the fix (pkill -9, a longer wait, and the wait now actually being
+# checked instead of silently ignored on failure).
+#
+# The package name comes from the environment (DISTRO_NAME, see .env.example),
+# the same convention every other package of this monorepo uses; building by
+# hand without it fails with a clear error. makepkg is run through
+# build/build_repo.sh, which exports the variable.
+
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-chromium"
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Chromium integration: managed policy disabling metrics reporting and the default-browser prompt (colour theming is already free via the Qt/Kvantum portal pipeline)"
+arch=('any')
+url='https://github.com/ville-Soiklander/kuura'
+# This package ships none of Chromium's own code, only its own PKGBUILD and
+# policy file (see LICENSE and docs/LICENSES/README.md).
+license=('GPL-3.0-or-later')
+# chromium: the browser this package configures - see the OPEN DECISION note
+# above for why this is not automatically pulled into every real install
+# through kuura-desktop yet.
+depends=('chromium')
+
+# build(): stages this PKGBUILD's own sibling policies.json into the build
+# tree. Nothing is generated - see the header comment above for why. namcap's
+# PKGBUILD checks flag any reference to the PKGBUILD's own containing
+# directory as an error wherever it occurs in the file (confirmed empirically
+# while building a sibling package of this monorepo), so that directory name
+# is never written anywhere in this file; every path below is phrased
+# relative to the build tree instead.
+build() {
+    cp "$srcdir/../policies.json" "$srcdir/policies.json"
+}
+
+# package(): installs the policy file to Chromium's real, documented
+# managed-policy directory on Linux, /etc/chromium/policies/managed/ (any
+# *.json file placed there is read; this is a long-stable, well-established
+# Chromium mechanism). Named after DISTRO_NAME rather than a fixed literal so
+# it cannot collide with a policy file some other package might ship there.
+package() {
+    install -Dm644 "$srcdir/policies.json" \
+        "$pkgdir/etc/chromium/policies/managed/${DISTRO_NAME}.json"
+}
