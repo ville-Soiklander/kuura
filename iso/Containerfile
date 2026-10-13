@@ -1,0 +1,75 @@
+# Build image for the live ISO (docs/ISO_CONTRACT.md). Pinned to the same Arch Linux
+# Archive snapshot as every other build in this project (ARCH_ARCHIVE_DATE), so the
+# archiso package it installs is the exact version (90-1) this profile was built
+# against and verified with - see docs/ISO_CONTRACT.md's own header for how that
+# version was fetched and inspected.
+#
+# Built and driven by iso/build_iso.sh, never invoked by hand: that script stages the
+# profile (with its @DISTRO_NAME@ template tokens already substituted) and a copy of
+# the signed repository into the build context before `podman build` ever runs, then
+# creates a container from this image, runs iso/run_mkarchiso.sh inside it, and copies
+# the finished .iso back out - the same create/start/cp shape make repo already uses.
+
+FROM docker.io/library/archlinux:base
+
+ARG ARCH_ARCHIVE_DATE
+
+# Point pacman at the dated archive snapshot only, exactly like build/Containerfile.
+RUN case "${ARCH_ARCHIVE_DATE}" in \
+        [0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]) ;; \
+        *) echo "ARCH_ARCHIVE_DATE must have the form YYYY/MM/DD" >&2; exit 1 ;; \
+    esac \
+    && printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' \
+        "${ARCH_ARCHIVE_DATE}" > /etc/pacman.d/mirrorlist
+
+# Same mirror-stall mitigation as build/Containerfile and harness/vm/Containerfile
+# (see either's identical comment): the archive server stalls under the default five
+# parallel downloads ("Operation too slow" / "Connection reset by peer"), confirmed
+# repeatedly in practice while this profile's own packages.x86_64 additions
+# (kuura-installer-config -> calamares's large Qt6/KDE Frameworks dependency tree)
+# were being built via build/Containerfile - the same archiso package install here
+# pulls a comparably large set, so it gets the same fix pre-emptively rather than
+# waiting to rediscover it.
+RUN sed -i -e 's/^#\?ParallelDownloads.*/ParallelDownloads = 2/' /etc/pacman.conf \
+    && grep -q '^ParallelDownloads = 2$' /etc/pacman.conf
+
+# Refresh the keyring first (see build/Containerfile's identical comment: packages in
+# the snapshot may be signed by keys the base image's own keyring does not know yet).
+# archiso: ships mkarchiso itself. arch-install-scripts: pacstrap/arch-chroot, which
+# mkarchiso calls. dosfstools/mtools: the EFI system partition image (mkfs.fat,
+# mcopy). squashfs-tools: the airootfs.sfs image. libisoburn: xorriso, which builds
+# the final hybrid ISO9660 image. e2fsck (e2fsprogs) is already part of `base`.
+RUN pacman -Sy --noconfirm archlinux-keyring \
+    && pacman -Syuu --noconfirm \
+    && pacman -S --noconfirm --needed \
+        archiso arch-install-scripts dosfstools mtools squashfs-tools libisoburn sudo gnupg \
+    && rm -rf /var/cache/pacman/pkg/*
+
+# makepkg's "never run as root" rule does not apply to mkarchiso, but its rootless
+# path (unshare --map-auto --map-root-user, see docs/ISO_CONTRACT.md's "Rootless
+# build" section) needs a real, unprivileged caller to exercise in the first place.
+# Passwordless sudo exists for the one step that genuinely needs the container's real
+# root (trusting kuura's repository key in the system pacman keyring at
+# /etc/pacman.d/gnupg, used by pacstrap for signature verification - see
+# iso/run_mkarchiso.sh) and as the documented fallback path if the rootless mkarchiso
+# invocation itself is empirically proven not to work in this podman setup.
+RUN useradd --create-home --shell /bin/bash builder \
+    && echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder \
+    && chmod 0440 /etc/sudoers.d/builder
+
+WORKDIR /home/builder
+
+# profile/ (already template-substituted by iso/build_iso.sh) and repo-src/ (the
+# signed repository, read at BUILD TIME by the [@DISTRO_NAME@] entry in
+# profile/pacman.conf - see that file's own comment) are staged by iso/build_iso.sh's
+# stage_context(), never bind-mounted (ownership/permissions of a Windows-drive mount
+# are unreliable, same reasoning as build/Containerfile).
+COPY --chown=builder:builder profile/ profile/
+COPY --chown=builder:builder repo-src/ repo-src/
+COPY --chown=builder:builder --chmod=0755 run_mkarchiso.sh run_mkarchiso.sh
+
+USER builder
+
+# Configuration (DISTRO_NAME, SOURCE_DATE_EPOCH) is passed in as environment
+# variables when the container is created, exactly like build_repo.sh's container.
+CMD ["bash", "run_mkarchiso.sh"]

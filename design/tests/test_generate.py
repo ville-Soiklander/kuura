@@ -12,11 +12,11 @@ from design.generate import generate, main
 class TestGenerate:
     """Tests for generate() function."""
 
-    def test_generate_writes_fourteen_files(self, tmp_path):
-        """generate() should write exactly 14 files: 4 generators x 2 modes, plus 3
+    def test_generate_writes_fifteen_files(self, tmp_path):
+        """generate() should write exactly 15 files: 4 generators x 2 modes, plus 3
         mode-independent layout files, plus 1 mode-independent C++ header, plus 1
         mode-independent fontconfig alias, plus 1 mode-independent kwin sliding-popups
-        ini fragment."""
+        ini fragment, plus 1 mode-independent Calamares branding descriptor."""
         from design.validate import load_tokens
 
         tokens_path = Path(__file__).parent.parent / "tokens.json"
@@ -31,8 +31,8 @@ class TestGenerate:
              patch("design.generators.cpp_header.render", return_value="// header output\n"):
             result = generate(tokens, tmp_path, "test_theme")
 
-        # Verify exactly 14 files were created
-        assert len(result) == 14, f"Expected 14 files, got {len(result)}: {result}"
+        # Verify exactly 15 files were created
+        assert len(result) == 15, f"Expected 15 files, got {len(result)}: {result}"
 
         # Verify all files exist
         for path in result:
@@ -58,13 +58,14 @@ class TestGenerate:
 
         # Verify directory structure
         dirs = set(p.parent.name for p in result)
-        assert dirs == {"plasma", "kvantum", "gtk", "qml", "layout", "cpp", "fontconfig", "kwin"}, \
-            f"Expected 8 directories, got {dirs}"
+        assert dirs == {"plasma", "kvantum", "gtk", "qml", "layout", "cpp", "fontconfig", "kwin", "calamares"}, \
+            f"Expected 9 directories, got {dirs}"
 
-        # Verify filenames contain the theme name (except qml's, layout's, cpp's and
-        # kwin's own fixed, real-target filenames, which do not vary by theme name)
+        # Verify filenames contain the theme name (except qml's, layout's, cpp's,
+        # kwin's and calamares' own fixed, real-target filenames, which do not
+        # vary by theme name)
         for path in result:
-            assert "mytheme" in path.name or path.parent.name in ("qml", "layout", "cpp", "kwin"), \
+            assert "mytheme" in path.name or path.parent.name in ("qml", "layout", "cpp", "kwin", "calamares"), \
                 f"Expected theme name in {path.name}"
 
     def test_generate_invalid_name_raises_valueerror(self, tmp_path):
@@ -114,7 +115,7 @@ class TestGenerate:
                  patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
                  patch("design.generators.cpp_header.render", return_value="// header output\n"):
                 result = generate(tokens, tmp_path, valid_name)
-                assert len(result) == 14
+                assert len(result) == 15
 
     def test_generate_calls_all_six_generators(self, tmp_path):
         """generate() should call all six generator.render() functions."""
@@ -254,7 +255,7 @@ class TestMain:
         assert out_dir.exists(), "Output directory should be created"
         # Verify files were written (only count files, not directories)
         files = [p for p in out_dir.rglob("*") if p.is_file()]
-        assert len(files) == 14, f"Expected 14 files, got {len(files)}: {files}"
+        assert len(files) == 15, f"Expected 15 files, got {len(files)}: {files}"
 
     def test_main_default_tokens_path(self, tmp_path):
         """main() should use default tokens.json if not specified."""
@@ -269,7 +270,18 @@ class TestMain:
              patch("design.generate.PROJECT_ROOT", tmp_path), \
              patch("design.validate.load_tokens") as mock_load:
             mock_load.return_value = {
-                "color": {"light": {}, "dark": {}},
+                "color": {
+                    "light": {},
+                    # window/text/accent/accent_text are read for real (not mocked)
+                    # by generators.calamares_branding.render() - see that module's
+                    # own docstring for why these four dark-palette keys specifically.
+                    "dark": {
+                        "window": "#15181C",
+                        "text": "#E6E9ED",
+                        "accent": "#4FB3C8",
+                        "accent_text": "#0E1418",
+                    },
+                },
                 "radius": {"window": 14, "panel": 12, "menu": 10, "card": 12, "button": 8, "field": 8, "tooltip": 8, "icon": "test"},
                 "material": {
                     "blur_radius": 36,
@@ -454,8 +466,8 @@ class TestEndToEnd:
         # If all generators are implemented, run the end-to-end test
         result = generate(tokens, tmp_path, "e2e_theme")
 
-        # Verify 14 files were created
-        assert len(result) == 14
+        # Verify 15 files were created
+        assert len(result) == 15
         for path in result:
             assert path.exists(), f"File not created: {path}"
             # Verify file is not empty and ends with newline

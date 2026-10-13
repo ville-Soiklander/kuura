@@ -37,5 +37,10 @@ packages/*/generated/
 # part of the shipped project
 .scratch/
 
+# Vaihe 7 ISO/install recon scratch: rebuilt ISOs, repo copies, QEMU test disks
+# produced while verifying Calamares install behaviour -- multi-GB binaries,
+# never part of the shipped project
+.recon-tmp/
+
 # Editor-local settings (e.g. CMake Tools writes an absolute local path here)
 .vscode/

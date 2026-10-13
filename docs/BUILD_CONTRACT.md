@@ -93,6 +93,20 @@ on CI runners); the build never needs a root-owned container engine.
   added here).
 - Every PKGBUILD passes `namcap` without errors.
 - Third-party assets (fonts, icons) are listed in `docs/ASSETS.md` before merge.
+- `packages/calamares/PKGBUILD` is the one exception to "one directory, one
+  first-party package" above: it is vendored, not authored by this project
+  (see its own header comment for the exact AUR commit and the reasoning).
+  Calamares (the Vaihe 7 KDE installer) is AUR-only, and the Arch Linux
+  Archive only mirrors the official repos, so `ARCH_ARCHIVE_DATE` cannot pin
+  it the way it pins everything else here; the AUR package's own PKGBUILD is
+  instead pinned by vendoring it at an exact, recorded git commit of
+  `https://aur.archlinux.org/calamares.git`. This also makes it the first
+  package in this monorepo whose `source=()` is non-empty: every other
+  PKGBUILD here ships pure local config/skel files and fetches nothing over
+  the network, while Calamares' build downloads its release tarball from
+  Codeberg (upstream's own host) at build time, verified only by the
+  `sha256sums` the AUR PKGBUILD itself carries - a real, if narrow, gap in
+  this project's otherwise fully archive-pinned supply chain.
 
 ## Repository layout produced by `make repo`
 

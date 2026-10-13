@@ -1,0 +1,175 @@
+# VENDORED FILE - NOT first-party, unlike every other packages/*/PKGBUILD in
+# this monorepo. Everything below the blank line is the AUR community's own
+# PKGBUILD for Calamares, copied byte-for-byte (comments, variable names,
+# build()/package() logic, sha256sums - all of it) from:
+#
+#   https://aur.archlinux.org/calamares.git
+#   commit 167151beb537c06cb75c8dbfd409799ba308bb66
+#   (AUR commit date 2026-03-23 03:44:45 +0100; vendored into this repository
+#   2026-10-08 via `git ls-remote` + `git clone` of that exact URL, HEAD of
+#   the `master` branch at vendor time - not reconstructed from memory)
+#
+# This resolves to calamares 3.4.2-2 (pkgver=3.4.2, pkgrel=2 below), fetching
+# upstream's own release tarball from Codeberg
+# (https://codeberg.org/Calamares/calamares/releases/download/v3.4.2/...).
+#
+# WHY VENDORED INSTEAD OF PINNED VIA ARCH_ARCHIVE_DATE (see docs/BUILD_CONTRACT.md
+# and .env.example for that mechanism, used by every OTHER dependency of this
+# project): Calamares does not exist in Arch's official repos (core/extra) at
+# any date - it is AUR-only. The Arch Linux Archive only mirrors the official
+# repos, so there is no by-date snapshot of the AUR to point at; pinning an
+# AUR package means pinning an exact git commit of ITS OWN repo instead, which
+# is what this file is. This was a deliberate, explicit choice by the project
+# owner over writing a from-scratch PKGBUILD against the upstream tag: the AUR
+# PKGBUILD already carries a correct, community-maintained dependency list for
+# this large Qt6/KDE-Frameworks application (kcoreaddons, kpmcore,
+# libpwquality, qt6-declarative, qt6-svg, yaml-cpp + the makedepends below),
+# and this project only CONFIGURES Calamares (Vaihe 7), it does not modify it
+# - re-deriving that dependency list from Calamares' own CMakeLists.txt by hand
+# would be real extra work for no benefit here, unlike this monorepo's actual
+# first-party packages (packages/kuura-shell etc.), which genuinely are authored
+# by this project and have no such upstream PKGBUILD to defer to.
+#
+# NOT VENDORED FROM THE SAME AUR COMMIT: 0001-support-paru.patch and
+# 0001-support-yay.patch. Both files exist in the AUR git repo at this commit,
+# but neither is named by this PKGBUILD's own source=() array and neither is
+# applied anywhere in build() - they are unused leftovers of a past revision of
+# this AUR package, not part of what actually builds 3.4.2-2. Nothing here
+# depends on them, so nothing here vendors them. Likewise, this commit ships no
+# .install file (some AUR packages do; this one does not) - there is nothing of
+# that kind to vendor either.
+#
+# REPRODUCIBILITY CAVEAT (see also the short paragraph added to
+# docs/BUILD_CONTRACT.md for this): every OTHER PKGBUILD in this monorepo has
+# an empty source=() - pure local config/skel files, nothing fetched over the
+# network at build time. This is the first package whose build depends on a
+# real source= that pulls a tarball from Codeberg over the network
+# (sha256sums below guards its integrity, but the URL itself is outside the
+# ARCH_ARCHIVE_DATE-pinned Arch mirror and outside this project's own control).
+#
+# IF CALAMARES EVER NEEDS UPDATING: re-vendor (take a fresh AUR commit, repeat
+# the same `git ls-remote`/`git clone` verification, update the header above
+# with the new commit hash and date) rather than hand-editing pkgver/source=/
+# sha256sums in place - hand-editing would silently drop the "this is exactly
+# what the AUR community shipped at a verified commit" guarantee this file
+# exists to provide. The ONE deliberate exception is the two extra `depends`
+# entries marked below - re-check whether they are still needed when
+# re-vendoring (run namcap on the freshly built package again) rather than
+# dropping them unquestioned.
+#
+# ONE REAL, BUILD-DISCOVERED FIX TO THE OTHERWISE-UNMODIFIED `depends` ARRAY
+# (everything else below is untouched from the vendored commit): a real
+# `make repo` run of this project's own pipeline built this PKGBUILD
+# successfully, but namcap's analysis of the RESULTING PACKAGE (not of this
+# PKGBUILD file - that part lints clean) reported two genuine `E:` errors this
+# project's build contract treats as fatal (see build/build_repo.sh's
+# lint_with_namcap): 'python' (libcalamares.so.3.4.2 links
+# libpython3.14.so.1.0, and several modules, e.g.
+# usr/lib/calamares/modules/packages/main.py, are Python scripts) and
+# 'hicolor-icon-theme' (Calamares installs icons under the hicolor theme
+# hierarchy it does not itself own). Neither is invented - both come straight
+# from namcap's real inspection of the built .pkg.tar.zst's actual ELF/script
+# dependencies, the same tool and the same E:-is-fatal rule every OTHER
+# package of this monorepo is held to. The AUR community PKGBUILD most likely
+# omits them because a real desktop install already has both from unrelated
+# packages, so the gap is invisible there; this project's minimal build
+# container has neither by default, so the gap surfaces as a hard namcap
+# error instead of staying silent.
+#
+# Configuration (DISTRO_NAME etc.) is irrelevant to this file: unlike this
+# monorepo's own packages, pkgname is NOT built from DISTRO_NAME - it stays the
+# literal upstream AUR package name "calamares", unmodified, like every other
+# field below.
+
+# Maintainer:
+# Contributor: Rustmilian Rustmilian@proton.me
+
+_pkgname="calamares"
+pkgname="$_pkgname"
+pkgver=3.4.2
+pkgrel=2
+pkgdesc="Distribution-independent installer framework"
+url="https://codeberg.org/Calamares/calamares"
+license=("GPL-3.0-or-later")
+arch=('i686' 'x86_64')
+
+depends=(
+  'kcoreaddons'
+  'kpmcore'
+  'libpwquality'
+  'qt6-declarative'
+  'qt6-svg'
+  'yaml-cpp'
+  # --- added by this project, not upstream - see the header comment's
+  # "ONE REAL, BUILD-DISCOVERED FIX" paragraph for why namcap requires both.
+  'python'
+  'hicolor-icon-theme'
+)
+makedepends=(
+  'extra-cmake-modules'
+  'libglvnd'
+  'ninja'
+  'qt6-tools'
+  'qt6-translations'
+)
+
+_pkgext="tar.gz"
+source=("$_pkgname-$pkgver.$_pkgext"::"$url/releases/download/v$pkgver/$_pkgname-$pkgver.$_pkgext")
+sha256sums=('733bbbb00dc9f84874bd5c22960952f317ea2537565431179fa2152b2fbfdccc')
+
+build() {
+  local _skip_modules=(
+    dracut
+    dracutlukscfg
+    dummycpp
+    dummyprocess
+    dummypython
+    dummypythonqt
+    initramfs
+    initramfscfg
+    interactiveterminal
+    packagechooser
+    packagechooserq
+    services-openrc
+  )
+
+  # Correct source directory (inside src/)
+  local _pkgsrc_dir="$srcdir/$_pkgname-$pkgver"
+
+  local _cmake_options=(
+    -B build
+    -S "$_pkgsrc_dir"
+    -G Ninja
+    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_INSTALL_PREFIX='/usr'
+    -DCMAKE_INSTALL_LIBDIR='lib'
+    -DWITH_QT6=ON
+    -DINSTALL_CONFIG=ON
+    -DSKIP_MODULES="${_skip_modules[*]}"
+    -DBUILD_TESTING=OFF
+
+    # Explicit KDE install dirs to suppress warnings
+    -DKDE_INSTALL_BINDIR=/usr/bin
+    -DKDE_INSTALL_SBINDIR=/usr/sbin
+    -DKDE_INSTALL_LIBDIR=/usr/lib
+    -DKDE_INSTALL_LIBEXECDIR=/usr/libexec
+    -DKDE_INSTALL_INCLUDEDIR=/usr/include
+    -DKDE_INSTALL_LOCALSTATEDIR=/var
+    -DKDE_INSTALL_SHAREDSTATEDIR=/usr/share
+    -DKDE_INSTALL_DATAROOTDIR=/usr/share
+    -DKDE_INSTALL_DATADIR=/usr/share
+    -DKDE_INSTALL_LOCALEDIR=/usr/share/locale
+    -DKDE_INSTALL_MANDIR=/usr/share/man
+    -DKDE_INSTALL_INFODIR=/usr/share/info
+    -DKDE_INSTALL_SYSCONFDIR=/etc
+
+    -Wno-dev
+  )
+
+  cmake "${_cmake_options[@]}"
+  cmake --build build
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install build
+}

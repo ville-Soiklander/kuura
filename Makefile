@@ -40,7 +40,7 @@ SHOTS_DIFF_DIR := .build/shots-diff
 GOLDENS_DIR    := harness/goldens
 
 .PHONY: image repo verify-install check test clean require-config \
-	vm-image shots shots-determinism goldens-review goldens-accept
+	vm-image shots shots-determinism goldens-review goldens-accept iso
 
 # Build the build image (packages frozen to ARCH_ARCHIVE_DATE, tools, user, scripts).
 image: require-config
@@ -106,6 +106,13 @@ goldens-review: vm-image
 # reading the review report, then commit the result. The tool refuses to run in CI.
 goldens-accept:
 	python3 -m harness.shots.accept --shots $(SHOTS_DIR) --goldens $(GOLDENS_DIR)
+
+# Build the live ISO (iso/profile/, docs/ISO_CONTRACT.md). Needs the signed repository
+# first: kuura's own packages are pulled into the squashfs from it exactly like
+# make vm-image does, and a second copy is staged into the ISO itself (iso/build_iso.sh)
+# so the live session and Calamares can install from local media with no network.
+iso: repo
+	bash iso/build_iso.sh
 
 # Static checks that do not need a container.
 check:

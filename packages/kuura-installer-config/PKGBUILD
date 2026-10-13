@@ -1,0 +1,212 @@
+# Calamares installer configuration: branding (icon, wallpaper, sidebar colours -
+# all generated from design/tokens.json, see design/generators/
+# calamares_branding.py), the top-level settings.conf (module sequence +
+# branding component name), and every module's own config under
+# /etc/calamares/modules/ (Vaihe 7 of the working brief, docs/ISO_CONTRACT.md's
+# "Calamares configuration" section - the locked interface this package
+# implements). Ships no upstream SOURCE of its own code (like kuura-shell/
+# kuura-desktop, built from this monorepo), but DOES vendor real upstream
+# Calamares config FILES as static data (calamares-defaults/, see that
+# directory's own file headers) - the same "vendor a real external default,
+# flag the one place it differs" discipline packages/calamares/PKGBUILD's own
+# header comment already establishes for the Calamares package itself, applied
+# here to its *config* instead of its *source code*. Vendoring these as static
+# files checked into this repo (rather than fetching them over the network
+# inside build(), the way packages/calamares/PKGBUILD's own source=() does for
+# the Calamares tarball) keeps this package's own build fully offline and
+# reproducible from the pinned archive snapshot, matching every OTHER
+# first-party PKGBUILD in this monorepo (packages/calamares/PKGBUILD's own
+# header comment flags its network fetch as the deliberate exception, not the
+# rule).
+#
+# The package name comes from the environment (DISTRO_NAME, see .env.example),
+# the same convention as kuura-shell/kuura-assets/kuura-desktop; building by
+# hand without it fails with a clear error. makepkg is run through
+# build/build_repo.sh, which exports the variable.
+#
+# SOURCE OF THE VENDORED DEFAULTS: calamares-defaults/settings.conf.in and
+# calamares-defaults/modules/*.conf are fetched verbatim from
+# https://codeberg.org/Calamares/calamares at tag v3.4.2 - the exact same
+# real source packages/calamares/PKGBUILD's own header documents for the
+# Calamares package itself, so this project's installer-config and the
+# Calamares binary it configures are guaranteed to agree on what "the
+# default" means. Every file's own top-of-file comment states this again
+# and names the real upstream path it came from. Four files carry deliberate,
+# flagged changes from that real default (see their own header comments for
+# the exact line(s) and why):
+#   - modules/users.conf:    setRootPassword: true  -> false
+#   - settings.conf.in:      THREE changes -
+#       (1) branding: default -> branding: @NAME@ (a plain sed placeholder,
+#           substituted below - NOT a Calamares-side change; upstream's own
+#           value is the literal string "default", ours is this project's
+#           own branding component name)
+#       (2) `- initramfs` commented out of the exec sequence (real bug found
+#           via a live boot 2026-10-12, not guessed: packages/calamares/
+#           PKGBUILD's own _skip_modules never builds this module for an
+#           Arch target - initcpio+initcpiocfg already cover it - so leaving
+#           it uncommented made Calamares fatally bail at launch; see
+#           settings.conf.in's own header for the full story)
+#       (3) `shellprocess` and `packages` ADDED to the exec sequence right
+#           after `unpackfs` (real install-blocking findings from actually
+#           running an install to completion in QEMU, 2026-10-12 - see
+#           docs/ISO_CONTRACT.md's "Live-only cleanup" section and
+#           settings.conf.in's own header for the full story)
+#   - modules/unpackfs.conf: TWO changes - upstream's own non-functional
+#     dummy example (unsquashes ../CHANGES, a single file, not a real
+#     rootfs) -> (1) a real `source`/`sourcefs: squashfs` entry pointing at
+#     the live medium's own squashfs image, found empirically on a real
+#     booted ISO (see the file's own header comment for the findmnt/losetup
+#     evidence) - this was deliberately left open by the Vaihe 7 brief until
+#     a real boot could confirm the real path rather than guessing it; (2) a
+#     second `sourcefs: file` entry restoring /boot/vmlinuz-linux +
+#     initramfs-linux.img from the live ISO media (real bug found via a real
+#     install reaching `shellprocess`'s mkinitcpio call 2026-10-13, not
+#     guessed: mkarchiso's own build strips these out of the squashfs for
+#     ISO-size reasons, so the squashfs entry above never contained them -
+#     see docs/ISO_CONTRACT.md's "Live-only cleanup" and the file's own
+#     header for the full story)
+# modules/partition.conf is vendored completely UNCHANGED - see its own
+# header comment for why docs/ISO_CONTRACT.md's locked partitioning decision
+# (ext4 default, LUKS offered not forced) turned out to already be exactly
+# what the real upstream default ships, once actually read rather than
+# assumed. modules/shellprocess.conf and modules/packages.conf are NOT
+# vendored at all (unlike every file above) - the real upstream default for
+# both is itself a non-functional dummy/example (same category unpackfs.conf
+# started in before its own one flagged change), so each is this project's
+# own config written against the real v3.4.2 schema; see each file's own
+# header for the full, real, audited content it configures. Every other
+# module config under modules/ (welcome, locale, keyboard, mount, machineid,
+# fstab, initcpiocfg, initcpio, displaymanager, services-systemd, initramfs,
+# bootloader, umount, finished) is likewise vendored completely unchanged -
+# this project has no opinion about them yet (docs/ISO_CONTRACT.md's own
+# instruction). Four modules in the real default *sequence* (summary,
+# localecfg, networkcfg, hwclock) ship NO config file at all upstream
+# (confirmed by listing their real source directories - each contains only
+# module code, no *.conf) and therefore have no file here either; inventing
+# one for them would not be "a default", it would be a guess.
+#
+# depends=('calamares'): this package is config FOR Calamares and is useless
+# without it, the same direct-dependency logic kuura-shell's own
+# depends=('kvantum') already follows for its own theme engine.
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-installer-config"
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Calamares installer configuration: branding, settings.conf and module defaults generated/vendored from this project's own design tokens and the real upstream Calamares defaults"
+arch=('any')
+url='https://github.com/ville-Soiklander/kuura'
+# Generated configuration and this package's own vendored-with-one-line-diff
+# copies of Calamares' real default configs are GPL-3.0-or-later (see LICENSE
+# and docs/LICENSES/README.md), matching every other first-party package in
+# this monorepo. The vendored upstream text itself is CC0-1.0 per its own
+# SPDX header (see calamares-defaults/*), which is compatible with being
+# redistributed under this project's own GPL-3.0-or-later alongside it.
+license=('GPL-3.0-or-later')
+depends=('calamares')
+# python: build() runs design/generate.py, design/generate_icons.py and
+# design/generate_wallpapers.py through their own `python -m` CLIs.
+# python-pillow: generate_wallpapers.py needs Pillow (see its own module
+# docstring and packages/kuura-assets/PKGBUILD's identical comment) - a
+# build-time-only Python dependency, not something the installed package
+# needs at runtime, so (like kuura-assets) it is not listed in `depends`.
+makedepends=('python' 'python-pillow')
+
+# build(): generate this project's own branding.desc (design.generate, which
+# now also covers the Calamares branding descriptor - see design/generate.py's
+# own module docstring), the systray icon SVG (design.generate_icons) and the
+# wallpaper PNGs (design.generate_wallpapers) from design/tokens.json, then
+# stage the vendored real-upstream module configs alongside them. Three
+# separate generator CLIs, like packages/kuura-assets/PKGBUILD's build() -
+# icons/wallpapers are not part of design/generate.py's own locked, fixed-
+# count manifest (see that module's own docstring).
+#
+# Never writes the literal name of this PKGBUILD's own containing variable
+# anywhere in this file (see packages/kuura-shell/PKGBUILD's own comment on
+# why: namcap's PKGBUILD checks flag every occurrence of it as an error, even
+# in comments) - every path below is phrased relative to $srcdir instead.
+build() {
+    ( cd "$srcdir/../../.." && python3 -m design.generate \
+        --out-dir "$srcdir/generated" --name "$DISTRO_NAME" )
+    ( cd "$srcdir/../../.." && python3 -m design.generate_icons \
+        --out-dir "$srcdir/generated" --name "$DISTRO_NAME" )
+    ( cd "$srcdir/../../.." && python3 -m design.generate_wallpapers \
+        --out-dir "$srcdir/generated" --name "$DISTRO_NAME" )
+
+    cp -r "$srcdir/../calamares-defaults" "$srcdir/calamares-defaults"
+}
+
+# package(): installs the generated branding (descriptor + the two real image
+# files it references by name - design/generators/calamares_branding.py's own
+# module docstring explains why these exact two files and these exact
+# filenames), the vendored settings.conf (one sed substitution) and every
+# vendored module config, to the real Calamares config locations
+# (/etc/calamares/..., confirmed from Calamares' own real source: a branding
+# component is "a directory ... in /etc/calamares/branding", and modules read
+# "/etc/calamares/modules" per settings.conf's own comments - see
+# packages/calamares/PKGBUILD's -DINSTALL_CONFIG=ON, which installs
+# Calamares' matching *search* paths, not its *defaults* - those come from
+# this package instead).
+package() {
+    local generated="$srcdir/generated"
+    local defaults="$srcdir/calamares-defaults"
+    local branding_dir="$pkgdir/etc/calamares/branding/${DISTRO_NAME}"
+
+    # ---- Branding: the generated descriptor plus the two real image files
+    # it names (Branding.cpp resolves a bare image filename relative to the
+    # branding.desc's own directory, confirmed from its real source - see
+    # calamares_branding.py's own module docstring - so both images are
+    # installed FLAT, alongside branding.desc, not in a subdirectory). ----
+    install -Dm644 "$generated/calamares/branding.desc" \
+        "$branding_dir/branding.desc"
+    install -Dm644 "$generated/icons/systray.svg" \
+        "$branding_dir/systray.svg"
+    install -Dm644 "$generated/wallpapers/${DISTRO_NAME}-vertical-dawn-light.png" \
+        "$branding_dir/${DISTRO_NAME}-vertical-dawn-light.png"
+
+    # ---- settings.conf: the vendored real upstream file, with its one
+    # @NAME@ placeholder (branding: @NAME@, see calamares-defaults/
+    # settings.conf.in's own header comment) substituted for $DISTRO_NAME -
+    # the same "sed a placeholder, nothing more" convention
+    # packages/kuura-shell/PKGBUILD's own skel templates already use. ----
+    local tmp
+    tmp="$(mktemp)"
+    sed "s/@NAME@/${DISTRO_NAME}/g" "$defaults/settings.conf.in" > "$tmp"
+    install -Dm644 "$tmp" "$pkgdir/etc/calamares/settings.conf"
+    rm -f "$tmp"
+
+    # ---- modules/partition.conf, modules/users.conf: vendored, each with at
+    # most the ONE flagged change its own header comment documents (users.conf
+    # has one; partition.conf has none - see calamares-defaults/modules/
+    # {partition,users}.conf's own header comments for why). ----
+    install -Dm644 "$defaults/modules/partition.conf" \
+        "$pkgdir/etc/calamares/modules/partition.conf"
+    install -Dm644 "$defaults/modules/users.conf" \
+        "$pkgdir/etc/calamares/modules/users.conf"
+
+    # ---- modules/shellprocess.conf, modules/packages.conf: this project's
+    # OWN config (not vendored - see this PKGBUILD's own header and each
+    # file's own header for why), implementing docs/ISO_CONTRACT.md's
+    # "Live-only cleanup" section. ----
+    install -Dm644 "$defaults/modules/shellprocess.conf" \
+        "$pkgdir/etc/calamares/modules/shellprocess.conf"
+    install -Dm644 "$defaults/modules/packages.conf" \
+        "$pkgdir/etc/calamares/modules/packages.conf"
+
+    # ---- Every other module in the real default sequence that ships a real
+    # default config file (docs/ISO_CONTRACT.md's own locked module
+    # sequence): vendored completely unchanged, this project has no opinion
+    # about any of these yet. summary/localecfg/networkcfg/hwclock are
+    # deliberately NOT in this list - the real upstream sequence has no
+    # default config file for them at all (verified, not assumed - see this
+    # PKGBUILD's own header comment), so installing one here would be
+    # inventing a default rather than shipping one. ----
+    local other_modules=(
+        welcome locale keyboard mount unpackfs machineid fstab
+        initcpiocfg initcpio displaymanager services-systemd initramfs
+        bootloader umount finished
+    )
+    local m
+    for m in "${other_modules[@]}"; do
+        install -Dm644 "$defaults/modules/${m}.conf" \
+            "$pkgdir/etc/calamares/modules/${m}.conf"
+    done
+}

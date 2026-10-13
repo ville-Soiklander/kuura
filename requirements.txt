@@ -2,3 +2,9 @@ pytest==9.0.3
 ruff==0.15.16
 fpdf2==2.8.2
 Pillow==12.3.0
+# PyYAML (MIT license, permitted per CLAUDE.md's license table): used to parse
+# Calamares' own real YAML config format (branding.desc, settings.conf,
+# modules/*.conf) in design/tests/test_calamares_branding.py and the
+# packages/kuura-installer-config build verification - this project had no
+# YAML dependency before Vaihe 7's Calamares integration.
+PyYAML==6.0.3

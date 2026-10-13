@@ -20,6 +20,16 @@ RUN case "${ARCH_ARCHIVE_DATE}" in \
     && printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' \
         "${ARCH_ARCHIVE_DATE}" > /etc/pacman.d/mirrorlist
 
+# The archive server throttles clients that open many connections and then stalls
+# them; with the default of five parallel downloads a large install fails with
+# "Operation too slow" / "Connection reset by peer" (seen repeatedly in practice
+# building packages/calamares, whose dependency tree is the first in this image to
+# pull enough large packages at once to trigger it - harness/vm/Containerfile
+# already carries this exact same mitigation for the same reason, see its own
+# comment). Two connections and no per-file speed limit are slower but reliable.
+RUN sed -i -e 's/^#\?ParallelDownloads.*/ParallelDownloads = 2/' /etc/pacman.conf \
+    && grep -q '^ParallelDownloads = 2$' /etc/pacman.conf
+
 # Refresh the keyring first: packages in the snapshot may be signed by keys that
 # the (possibly older or newer) base image does not know yet, which would make the
 # full upgrade fail signature checks. The second -u in -Syuu lets pacman also
