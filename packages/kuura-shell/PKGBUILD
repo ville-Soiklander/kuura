@@ -6,12 +6,16 @@
 # first login), so the result is reproducible from the pinned archive snapshot like
 # everything else the project ships.
 #
-# Also ships a session-wide GTK_THEME environment export (plasma-workspace/env/
-# 15-gtk-theme.sh.in below) - live verification found GTK4 apps in this image never
+# Also ships a session-wide GTK_THEME environment export (environment.d/
+# 15-gtk-theme.conf.in below) - live verification found GTK4 apps in this image never
 # honour ~/.config/gtk-4.0/settings.ini's gtk-theme-name at all (a broken portal
 # lookup overrides it unconditionally with "Adwaita"), so without this export the
 # GTK4 theme files above are generated and installed correctly but never actually
 # load. See docs/SHELL_CONTRACT.md's "GTK4/libadwaita" section for the live evidence.
+# This export (and the GTK_MODULES one below it) moved from
+# ~/.config/plasma-workspace/env/*.sh to ~/.config/environment.d/*.conf
+# (systemd's own environment.d(5) mechanism) on 2026-10-16 - see
+# environment.d/15-gtk-theme.conf.in's own header comment for why.
 #
 # The package name comes from the environment (DISTRO_NAME, see .env.example), the
 # same convention as kuura-desktop; building by hand without it fails with a clear
@@ -208,16 +212,23 @@ package() {
     install -Dm644 "$tmp" "$pkgdir/etc/skel/.config/gtk-4.0/settings.ini"
     sed "s/@NAME@/${DISTRO_NAME}/g" "$skel/.config/gtk-3.0/settings.ini.in" > "$tmp"
     install -Dm644 "$tmp" "$pkgdir/etc/skel/.config/gtk-3.0/settings.ini"
-    # 15-gtk-theme.sh: exports GTK_THEME=${DISTRO_NAME} for every new session (see
+    # 15-gtk-theme.conf: sets GTK_THEME=${DISTRO_NAME} for every new session (see
     # that template's own header comment for the live-confirmed portal bug this
-    # works around). Installed mode 644, matching the three skel templates above
-    # and this project's own test-image-only env/ scripts
-    # (harness/vm/guest/skel/.config/plasma-workspace/env/) - these files are
-    # SOURCED by the Plasma session startup script (". \"\$file\"" in a loop), never
-    # executed as a separate process, so none of them need the executable bit.
+    # works around, and for why this lives in ~/.config/environment.d/ rather than
+    # ~/.config/plasma-workspace/env/ as of 2026-10-16). Installed mode 644,
+    # matching the three skel templates above - environment.d files are parsed
+    # directly by systemd, not sourced or executed, so none of them need the
+    # executable bit either.
     sed "s/@NAME@/${DISTRO_NAME}/g" \
-        "$skel/.config/plasma-workspace/env/15-gtk-theme.sh.in" > "$tmp"
+        "$skel/.config/environment.d/15-gtk-theme.conf.in" > "$tmp"
     install -Dm644 "$tmp" \
-        "$pkgdir/etc/skel/.config/plasma-workspace/env/15-gtk-theme.sh"
+        "$pkgdir/etc/skel/.config/environment.d/15-gtk-theme.conf"
     rm -f "$tmp"
+
+    # 20-gtk-appmenu.conf: sets GTK_MODULES=appmenu-gtk-module so classic GTK3
+    # GtkMenuBar apps export their menu to the panel's Global Menu widget (see
+    # that file's own header comment). No template substitution needed, so
+    # installed directly, unlike the sed-generated file above.
+    install -Dm644 "$skel/.config/environment.d/20-gtk-appmenu.conf" \
+        "$pkgdir/etc/skel/.config/environment.d/20-gtk-appmenu.conf"
 }

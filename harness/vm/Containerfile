@@ -124,7 +124,8 @@ RUN retry() { n=0; until "$@"; do n=$((n + 1)); [ "$n" -lt 4 ] || return 1; echo
 #                    it, so the panel's Global Menu widget stays empty even though
 #                    `busctl` output alone can look like something worked. Loaded via
 #                    GTK_MODULES=appmenu-gtk-module, see
-#                    guest/skel/.config/plasma-workspace/env/20-gtk-appmenu.sh.
+#                    guest/skel/.config/environment.d/20-gtk-appmenu.conf (moved here
+#                    from plasma-workspace/env/20-gtk-appmenu.sh on 2026-10-16).
 #   chromium         verification-only addition for the Vaihe 6 Chromium investigation
 #                    (docs/SHELL_CONTRACT.md's own "verify, don't guess" rule): Chromium's
 #                    real source (ui/linux/linux_ui_factory.cc) maps the KDE desktop to

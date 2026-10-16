@@ -629,6 +629,570 @@ desktop`/`kuura-shell` and every sanity-kept package (`gpm mc vim brltty`)
 intact, confirmed twice independently. No further action needed here — the
 removal list and its real, measured effect are both locked.
 
+## Installed-system verification
+
+Decided, 2026-10-13 (project owner's explicit choice, `AskUserQuestion`):
+the DoD line below ("asennettu järjestelmä läpäisee vaiheiden 3–6
+diffit") is satisfied by reusing the *existing* `harness/shots/runner.py`
+`Runner` + `harness/states.toml` + `harness/shots/compare.py` machinery
+against a real Calamares-installed target, unchanged — not by a second,
+parallel QMP-only reimplementation of the same step/settle logic. That
+machinery drives the guest over `harness/shots/guest.py`'s `GuestAgent`
+(command execution, CPU-busy probing for settle detection), so the
+installed target needs a running guest agent to be reachable the same way
+the desktop harness's own pre-built image already is.
+
+`qemu-guest-agent` is already part of the live medium
+(`iso/profile/packages.x86_64`, inherited from archiso's own `releng`
+default — this project did not add it), but its systemd service was not
+enabled anywhere (no live-session `.wants/` symlink, and
+`packages/kuura-installer-config/calamares-defaults/modules/
+services-systemd.conf`'s own `units:` list was empty). **Decided:**
+`services-systemd.conf` now enables `qemu-guest-agent.service` on the
+installed target (one `units:` entry, `mandatory: true`). The service is a
+no-op on real hardware (it waits on a QEMU-specific virtio-serial channel
+that does not exist there) and is a narrower, more generic virtualisation
+convenience than `cloud-init` (removed earlier in this same document as
+genuinely VM/cloud-only dead weight on a desktop install) — it is also
+useful to any end user who happens to run kuura itself inside a VM
+(VirtualBox/VMware/Hyper-V clipboard/resize integration), not purely a
+testing artifact.
+
+**New permanent harness module, `harness/install/`** (peer to
+`harness/shots/` and `harness/vm/`), interface locked by the orchestrator
+2026-10-13 before delegating implementation (`boot.py`, `wizard.py`,
+`run.py` — full docstrings, `NotImplementedError` bodies):
+
+- `boot.py`'s `InstallVm`: real BIOS/UEFI QEMU boot (via `-cdrom`/`-drive`,
+  no `-kernel`/`-initrd`, no `-snapshot` — writes must persist across the
+  install), distinct from `harness/shots/vm.py`'s `Vm` for that reason.
+  Phase 1 boots the ISO with a blank disk and drives the install over QMP
+  only (no guest agent yet). `reboot_to_disk_only()` moves the SAME disk
+  into phase 2 (no ISO attached, proving the installed bootloader works)
+  and optionally attaches the now-running guest agent.
+- `wizard.py`'s `run_install()`: promotes this phase's own proven, ad-hoc
+  `isorecon/install_test.py` UI-automation sequence (Welcome → Location →
+  Keyboard → Partitions → Users → Summary → Install → Finish) into a
+  permanent, parametrized driver, reusing `harness/shots/qmp.py` and
+  `harness/shots/keys.py` unchanged. `WizardCredentials.username`
+  defaulting to `"desktop"` was meant to deliberately match
+  `harness.shots.guest.GuestUser()`'s own built-in default uid (1000) —
+  disproven by real evidence below; see the `liveuser` finding for the fix
+  that restores this assumption.
+- `run.py`: CLI entry point (`python3 -m harness.install.run`), exit codes
+  0/1/2 mirroring `harness/shots/capture.py`'s own convention. New Make
+  target `installed-verify` (depends on `iso`; deliberately not named
+  `verify-install`, which already means something unrelated — see that
+  target's own recipe). New CI job `install-harness`
+  (`.github/workflows/ci.yml`), copied from the existing
+  `screenshot-harness` job's "skip without a usable `/dev/kvm`" pattern.
+
+**First real end-to-end run, 2026-10-13/14 — wizard navigation confirmed
+working, two new findings beyond the original scope.** The delegated
+implementation hit a real bug first: `_highlighted_row_y`'s sidebar-colour
+scan false-matched Calamares' own product-icon logo (measured
+`(59,173,194)` against a `(79,179,200)` target, inside the comparison
+tolerance), making every page look like "still on Welcome" forever. Fixed
+with `_SIDEBAR_SCAN_Y_START = 300` (scan starts below the logo); confirmed
+by a real BIOS install run reaching Finish with a clean, non-repeating
+page sequence — not by unit tests alone.
+
+That same real run surfaced two things past Finish that the original
+interface design had not accounted for, both confirmed independently (the
+orchestrator mounted the resulting disk directly, not just trusted the
+agent's report):
+
+- **No autologin means the harness never sees a desktop.**
+  `modules/users.conf`'s `doAutologin: false` is a deliberate security
+  default (confirmed in that file) — so `Runner.wait_for_desktop()`
+  timed out waiting for `plasmashell`, which can never start with nobody
+  logged in. **Decided (project owner, `AskUserQuestion`, recommended
+  option): the harness drives a real SDDM login** (the same QMP
+  keyboard/mouse primitives `wizard.py` already has, typing the same
+  password `WizardCredentials` gave Calamares), rather than special-casing
+  autologin into a test-only build — the DoD's own wording ("asennettu
+  järjestelmä läpäisee...") means the system as actually shipped, not a
+  test-convenience variant of it.
+- **The live session's own `liveuser` account (uid 1000) survives every
+  install**, confirmed by mounting a real installed disk directly:
+  `/etc/passwd`/`shadow`/`group` entries and a ~150K home directory, all
+  present. `/etc/shadow` shows `liveuser:!:...` (locked, no valid password
+  hash, not in `wheel`) — not a privilege-escalation path — but a real UX
+  defect (visible in SDDM's own user list) that also pushes the real
+  installed account to uid 1001, breaking the `GuestUser()` uid-1000
+  assumption two paragraphs up. Same category of gap as every other
+  finding in `shellprocess.conf` (unpackfs copies it unconditionally, no
+  package owns it, nothing before this project's own audit ever removed
+  it). **Decided (project owner, `AskUserQuestion`, recommended option):
+  `shellprocess.conf` now also runs `-userdel -r liveuser`**, restoring
+  the real account to uid 1000.
+
+**Resolution mismatch, found and fixed 2026-10-14.** The first full diff-pass
+run (above) reached `Runner`/`compare` for real but failed 22/22, mostly with
+`image size mismatch: 1920x1080 vs 2560x1440`: `harness/install/boot.py`'s
+`InstallVm` boots at 1920x1080 (the module's own original docstring said
+"unrelated images/use cases, no reason to match" `harness/shots/vm.py`),
+while every file under `harness/goldens/` was captured by
+`harness/shots/vm.py`'s `Vm` at its own default, 2560x1440 — the two had
+simply never been made to agree. Presented to the project owner as an
+explicit choice (`AskUserQuestion`, this project's own standing "escalate
+rather than silently pick" rule): (A) make only phase 2 (the reboot + SDDM
+login + diff-pass — already a separate QEMU process from phase 1's Calamares
+install, confirmed from `reboot_to_disk_only`'s own implementation) boot at
+2560x1440 to match the goldens, leaving phase 1's already-calibrated
+Calamares wizard automation at 1920x1080 untouched; (B) recalibrate the
+entire harness (both phases, every Calamares coordinate) to 2560x1440; (C)
+capture a brand-new, separate set of 22 goldens at 1920x1080 just for
+install-verify. **The project owner chose (A).** Implemented: `boot.py`'s
+`reboot_to_disk_only()` gained an optional `resolution` keyword (default
+`None`, preserving old behaviour exactly); `run.py`'s call site passes
+`resolution=(2560, 1440)` explicitly; `wizard.py`'s three SDDM greeter
+constants (`_SDDM_USER_TILE`, `_SDDM_PASSWORD_FIELD`, `_SDDM_LOGIN_BUTTON`)
+were re-measured from scratch at 2560x1440 (not scaled from the 1920x1080
+values — confirmed live that the Breeze SDDM theme renders every widget at a
+**fixed physical pixel size** regardless of screen resolution and simply
+re-centres the login box on the bigger screen, so naive linear scaling would
+have been wrong) by booting the already-installed disk directly at the new
+resolution and pixel-scanning a real screendump, the same method every other
+coordinate in that file already uses. The old 1920x1080 SDDM constants were
+kept, renamed `_..._1920X1080`, as the historical record of that measurement
+rather than deleted. See `wizard.py`'s own comments for the exact measured
+bounding boxes.
+
+A full rebuilt-from-fresh-install re-run (`harness.install.run --firmware
+bios`, 1250s total) confirmed the resolution fix itself worked exactly as
+intended: **zero** `image size mismatch` or `pointer coordinate ... outside
+the screen` errors across all 22 states (previously 16 and 2 respectively).
+Phase 1 (fresh Calamares install from the existing ISO) and phase 2 (reboot
+to disk only, now at 2560x1440, SDDM login with the newly-measured
+coordinates) both completed cleanly — install finished in 352.5s, SDDM login
+in 10.9s. **However the diff-pass result is 0/22 passing, for reasons that
+are real and unrelated to resolution, not an artifact of the fix.** Each is
+reported honestly below rather than folded into "fixed":
+
+1. **8/22 (`notification`, `browser-window`, `app-menu-gtk`,
+   `gtk4-widget-factory`, each mode) still "the screen did not settle" —
+   root-caused, not just suspected, and NOT the same bug as the earlier
+   resolution-mismatch symptom.** Confirmed by directly mounting the fresh
+   install disk read-only (`qemu-nbd` + `mount -o ro,noload`, this project's
+   own standard technique) and checking for the binaries these states'
+   `states.toml` steps `run`: `notify-send`, `mousepad`, `gtk4-widget-factory`
+   and `harness-browser` are **all absent** from the installed target, and no
+   matching package (`libnotify`, `mousepad`, `gtk4-demos`) is in its pacman
+   local database at all. Cross-checked against `harness/vm/Containerfile`
+   (the pre-baked image goldens and vaiheet 3–6 are captured from): it
+   explicitly installs `libnotify firefox dolphin systemsettings mousepad
+   appmenu-gtk-module gtk4-demos chromium` as **test-only** packages for that
+   image, separate from the real product's package list
+   (`iso/profile/packages.x86_64`, `kuura-desktop`, `kuura-shell`). These
+   four states were never going to pass against a real Calamares install —
+   the commands silently do nothing (confirmed visually: the captured
+   `notification` frame is a plain, unchanged desktop, no popup ever
+   appeared), so `settle()` correctly times out waiting for a change that
+   can never come. This is a real gap in how `install-verify` reuses
+   `states.toml` (built for the harness's own fully-loaded test image)
+   against a genuinely bare install, not a bug in the resolution fix or in
+   `settle()` itself. **Not yet decided**, and deliberately left undecided
+   here rather than silently picked: ship the relevant test tools as part of
+   the real product so these states are meaningful post-install too, exclude
+   these 4 states from `install-verify`'s own selection (`--states`) as
+   structurally inapplicable to a bare install, or something else — a product
+   decision, not an implementation one.
+2. **14/22 (`desktop-empty`, `menubar-open`, `shelf-hover`, `overview`,
+   `search-open`, `files-window`, `settings-window`, each mode) status
+   `fail` — genuine pixel differences against the goldens, confirmed by
+   visual inspection of the actual diff images, with at least two distinct,
+   real contributing causes identified (not exhaustively root-caused further
+   than this):
+   - **Window/overview sizing differs substantially** between the freshly
+     installed target and the goldens — confirmed by side-by-side comparison
+     of `settings-window` (System Settings opens dramatically smaller on the
+     fresh install, cutting off content the golden shows in full) and
+     `overview` (the desktop thumbnail is smaller and lacks the golden's
+     teal selection border). This is the dominant contributor to the large
+     diff ratios (up to 81% of pixels) on every state that opens a window or
+     the overview effect. Most likely cause (plausible, not yet confirmed by
+     inspecting both images' saved KDE config directly): the pre-baked
+     `harness/vm/` image carries persisted per-app window geometry from
+     however it was built/baked, while a genuinely fresh Calamares-installed
+     user profile has no such saved state and falls back to each app's own
+     hard-coded first-run default size — flagged here as the leading
+     hypothesis, not a confirmed root cause.
+   - **`InstallVm`'s `build_command` (`boot.py`) never sets `-rtc
+     base=...,clock=vm`**, unlike `harness/shots/vm.py`'s `Vm` (which pins
+     the guest clock to `rtc_base` from `states.toml`, `2026-09-25T12:00:00`
+     by default). Confirmed directly from both modules' source: install-verify
+     captures the real host wall-clock time instead, so the panel clock glyph
+     will never match a golden's pinned time on any run — a real, independent
+     determinism gap in the install harness, confirmed but likely a
+     second-order contributor next to the window-sizing issue above (the
+     panel clock itself sits inside `states.toml`'s own `mask = [[2420, 0,
+     2560, 55]]`, which is correctly positioned over it — the mask is not the
+     bug).
+   - Separately confirmed via the diff images: in the simplest state with no
+     window open (`desktop-empty`), the differing pixels are cleanly isolated
+     to the top panel strip and the bottom dock (the wallpaper itself matches
+     pixel-for-pixel) — plausibly explained by `InstallVm` using a plain
+     `-device VGA,...` display adapter (required — see `boot.py`'s own
+     docstring on why `virtio-vga` segfaults QEMU on a cold BIOS/`-cdrom`
+     boot on this project's hosts) where `harness/shots/vm.py` uses
+     `virtio-vga`, which could plausibly render the project's own
+     translucent/frosted panel and dock material differently. This is a
+     plausible, source-confirmed-as-different-device hypothesis, not a
+     pixel-isolated proof of causation.
+
+None of the four options originally presented to the project owner (A/B/C
+above, or doing nothing) are affected by this — the resolution fix is
+confirmed working on its own terms. What remains (the two groups of
+failures above) is new scope the project owner has not yet been asked to
+decide on, consistent with this project's own standing rule not to let an
+implementation pass quietly narrow or reinterpret a DoD line. `harness/goldens/`
+was **not** touched, read, or re-approved by any part of this work — any
+`goldens-accept` decision remains the project owner's alone.
+
+**The two groups of failures above were decided, 2026-10-15 (project owner's
+explicit choice, `AskUserQuestion`, two rounds):**
+
+1. The 8 "did not settle" states (`notification`, `app-menu-gtk`,
+   `gtk4-widget-factory`, `browser-window`, each mode) are fixed by shipping
+   the real tools those states run, rather than excluding the states from
+   `install-verify`'s own selection. `packages/kuura-desktop/PKGBUILD`'s
+   `depends` gained `libnotify` (`notify-send`), `mousepad` and `gtk4-demos`
+   (`gtk4-widget-factory`) directly, plus a new, dedicated package,
+   `packages/kuura-harness-support/` (`${DISTRO_NAME}-harness-support`),
+   which ships the `browser-window` state's own `harness-browser` wrapper
+   script, its static test page and its throwaway browser-profile template —
+   byte-identical copies of `harness/vm/guest/overlay/`'s own files (see that
+   new PKGBUILD's own header comment for why these are maintained as their
+   own copies rather than reached across the repo at build time, and for the
+   full reasoning behind every choice below). Investigated and flagged
+   before implementing, not silently picked: `gtk4-demos` pulls in ~28.5 MiB
+   of GStreamer/Vulkan/colour-management dependencies purely for a demo app
+   (confirmed via `pacman -Si`), and `harness-browser` is not a real browser
+   at all (a wrapper that resets to a fresh profile and opens a fixed local
+   page every launch) — the project owner chose to ship both as-is anyway
+   after seeing these costs stated plainly.
+2. `harness-browser` needs a system-wide Firefox `policies.json`
+   (`/usr/lib/firefox/distribution/policies.json`) to be fully deterministic,
+   but `packages/kuura-firefox/PKGBUILD` already owns that exact path with a
+   deliberately lighter policy (does not disable telemetry, Pocket, Firefox
+   Accounts or the password manager for a real end user). **Decided: leave
+   `kuura-firefox`'s own `policies.json` untouched.**
+   `packages/kuura-harness-support/`'s own `user.js` (profile-scoped, no
+   conflict — applies only to `harness-browser`'s own throwaway profile, never
+   a real user's actual Firefox profile) still ships, so first-run pages,
+   restore prompts, animations and forced software rendering are still
+   guaranteed deterministic on a real install; only the subset of
+   determinism that depended on the system-wide policy (telemetry/Pocket/
+   password-manager/accounts suppression) does not carry over to a real
+   install the way it does on the test image. Accepted as the cost of not
+   changing every real end user's actual Firefox privacy/feature defaults
+   just to serve this harness.
+
+Verified before this was considered done: `pytest -q` (938 passed, 7
+skipped), `ruff check .` (clean), `python tools/check_forbidden_terms.py`
+(clean, exit 0), `bash -n` on the new PKGBUILD and script (syntax only — a
+real `make repo`/ISO rebuild and a full `harness.install.run` pass against
+the rebuilt ISO is the next step, to confirm `pacman` actually resolves and
+installs the four new packages on a real target and that the four
+previously-"did not settle" states now execute their `run` step
+successfully; this does **not** by itself fix the separate, still-undecided
+14-state pixel-diff findings documented above).
+
+**A real end-to-end run against the fixed packages, 2026-10-15/16, then
+surfaced a third, real, unrelated blocker and, once past it, root-caused the
+14/22+8/22 pixel-diff split above with certainty:**
+
+1. **New blocker, found and root-caused by the orchestrator directly (not a
+   subagent guess):** the package-fix verification run's SDDM login timed
+   out - a regression, since the identical code had logged in successfully
+   the run before. Booting the installed disk standalone and screendumping
+   repeatedly through the wait window showed the SDDM greeter rendering TWO
+   user rows ("Kuura Test" and, below it, "liveuser") instead of one - the
+   extra row pushes the password field below the fixed pixel coordinate
+   `_sddm_password_field_visible()` checks. Confirmed directly on the disk
+   (`qemu-nbd` + `mount -o ro,noload`): `liveuser` was back in `/etc/passwd`
+   and `desktop` was pushed to uid 1001 - the exact same bug the
+   `userdel -r liveuser` fix (above, "Live-only cleanup") already fixed once.
+   Confirmed via `tar -xOf`/`mount -o loop,ro` on both the built
+   `kuura-installer-config` package and the built ISO's own
+   `airootfs.sfs`: the `userdel -r liveuser` line was missing from BOTH,
+   despite being present in the real source file - **Podman's own
+   COPY-layer cache had silently served a pre-fix version of
+   `kuura-installer-config` despite `make repo` exiting 0**, the third
+   confirmed occurrence of this project's own documented cache-staleness
+   bug class (see memory `feedback_podman_copy_cache_staleness.md`), this
+   time hitting a package that was not touched by the current change (the
+   two brand-new packages added for the tool fix above had no stale layer
+   to collide with, which is why they were unaffected and why this was not
+   caught sooner). Fixed by rebuilding with Podman's cache disabled and
+   independently re-confirming the rebuilt package's and the rebuilt ISO's
+   own `shellprocess.conf` content directly (not trusted from any exit
+   code) before re-running install-verify. SDDM login then succeeded
+   (12.1s) and the run reached the Runner diff-pass for the first time.
+2. **All 22 states then failed the pixel-diff, by large, whole-frame-sized
+   margins** (5.5% to 81.5% of pixels differing, bounding boxes spanning
+   nearly the full 2560x1440 frame on every state) - not the narrow,
+   anti-aliasing-only differences a real visual regression against a
+   correctly-configured install would show. Comparing this run's 14
+   previously-measured states against the immediately prior (SDDM-blocked)
+   run's own numbers found them **numerically identical to several decimal
+   places** (e.g. `overview`: 0.7486537000868055 both times) - strong
+   evidence the harness is genuinely deterministic and that this is one
+   consistent, structural cause, not fresh per-run noise, and that the
+   newly-reachable 8 states are hitting the exact same underlying cause as
+   the already-known 14, not a new, different problem.
+3. **Root-caused with certainty** (orchestrator's own direct investigation:
+   diffed `harness/vm/guest/skel/` - the screenshot harness's own pre-baked
+   test image's per-user config, the one the goldens were captured against -
+   file by file against `packages/kuura-shell/skel/`, the real product's
+   own `/etc/skel`):
+   - `harness/vm/guest/skel/.config/kwinrulesrc` forces the file manager,
+     System Settings, browser and GTK text editor windows to a fixed
+     1000x600 geometry - present only on the test image, confirmed absent
+     from the real product's skel. A real install's apps open at their own
+     natural default size instead, explaining the largest ratios
+     (`files-window`/`settings-window`/`gtk4-widget-factory` ~74-75%,
+     `browser-window` ~57%, `app-menu-gtk` ~53%).
+   - `harness/vm/guest/skel/.config/plasma-workspace/env/10-vm-rendering.sh`
+     forces `LIBGL_ALWAYS_SOFTWARE=1` (the software Mesa rasteriser) for the
+     whole Plasma session - also test-image only. Orchestrator's own
+     screenshot comparison on the simplest state (`desktop-empty`, no window
+     open) found the differing pixels cleanly isolated to the top panel and
+     bottom dock, which render fully OPAQUE on the real install instead of
+     this project's own translucent "frost" material (correct on the
+     golden) - consistent with KWin's blur/translucency effect depending on
+     this explicit software-GL request, not available by default on
+     `-device VGA` (required here, see `boot.py`'s own docstring) without it.
+   - `harness/vm/guest/skel/.config/plasma-workspace/env/20-gtk-appmenu.sh`
+     (`GTK_MODULES=appmenu-gtk-module`) explained the remainder of
+     `app-menu-gtk`'s own difference (Mousepad's menu never reaching the
+     panel's Global Menu widget) - but investigating it surfaced that the
+     `appmenu-gtk-module` package itself is ALSO missing from the real
+     product entirely (not merely the env var), a find with its own decision
+     attached, below.
+
+**Decided, 2026-10-16 (project owner's explicit choice, `AskUserQuestion`,
+two rounds):**
+
+1. **`kwinrulesrc` and `10-vm-rendering.sh` are injected directly onto the
+   installed disk by the install-verify harness itself, never shipped in any
+   package.** Both files are explicitly documented, in their own source,
+   as test-image-only, predating this harness - promoting either to a real
+   product file would be a real regression for real users (forcing every
+   Dolphin window into a fixed 1000x600 box; forcing software rendering on
+   hardware that may have a perfectly good GPU). `harness/install/wizard.py`'s
+   new `inject_test_only_session_config()` reads both files directly from
+   `harness/vm/guest/skel/` (this repository's own single source of truth
+   for them - no duplicate copies to drift) and writes them onto the real
+   target via `GuestAgent.write_file()` (already handles correct ownership),
+   called from `run.py` after the guest agent connects but BEFORE
+   `log_into_sddm()` - required timing, since Plasma's `env/` scripts are
+   only sourced once, at session start, so writing them after login would be
+   one boot too late. Reuses the exact existing goldens; no new golden
+   approval round needed.
+2. **`appmenu-gtk-module` (the package) and `GTK_MODULES=appmenu-gtk-module`
+   (the env export) are promoted to real, permanently-shipped product files**
+   instead of also being injected - project owner's choice: working global
+   menu for classic GTK3 `GtkMenuBar` apps is a real, desired feature of this
+   project's own macOS-inspired desktop (the whole point of the panel's
+   Global Menu widget), not a test-only convenience that merely happened to
+   live on the test image, unlike the other two. `packages/kuura-desktop/
+   PKGBUILD` gained the `appmenu-gtk-module` dependency;
+   `packages/kuura-shell/skel/.config/plasma-workspace/env/20-gtk-appmenu.sh`
+   (a plain static file, no `@NAME@` templating needed) ships the env export
+   to every real new account via `kuura-shell`'s own `package()`. Because
+   this one is now a real product file, `inject_test_only_session_config()`
+   deliberately does NOT inject it too (would be redundant, not wrong).
+
+Verified before this was considered done: `pytest -q` (938 passed, 7
+skipped, no regression), `ruff check .` (clean),
+`python tools/check_forbidden_terms.py` (clean, exit 0). A real
+`make repo`/ISO rebuild and a full `harness.install.run` pass against the
+rebuilt ISO, to see the actual effect on all 22 states' pixel-diff ratios,
+is the next step - not yet run as of this paragraph.
+
+### 2026-10-16, continued: a real rebuild found a NEW blocker past this point
+
+A full `make repo` + ISO rebuild + `harness.install.run` against it (run by a
+delegated agent, independently re-verified by the orchestrator at each step
+per this project's standing "trust but verify" discipline) confirmed all
+three fixes above are genuinely present and took effect: `rtc` fix present
+in `boot.py`; `inject_test_only_session_config()` ran and wrote both files
+with correct, byte-identical content and correct ownership; the built
+`kuura-desktop`/`kuura-shell` packages really contain the `appmenu-gtk-module`
+dependency and the shipped env file; the real installed disk really has
+`appmenu-gtk-module` installed and the skel file propagated to the new
+account; `liveuser` still absent, `desktop` still uid 1000. Two unrelated
+infrastructure bugs were found and fixed along the way (both now in
+`feedback_wsl_background_process_dies_with_invocation.md` and the expanded
+`feedback_podman_copy_cache_staleness.md` in project memory): a WSL2
+background-process-lifetime gotcha, and a FOURTH confirmed location of this
+project's cache-staleness bug class (the native `pacman` package cache on
+the `kuura-arch-build` host, keyed by filename/version like the other three,
+not content).
+
+**But the install-verify run itself then failed with a genuinely new
+problem, past the point anything had ever reached before:** `0/22` states
+captured - `runner.wait_for_desktop()` raised "the desktop did not settle
+after boot" even though SDDM login itself succeeded (12.0s) and the
+test-only injection ran correctly. Root-caused via direct, read-only
+diagnosis (reboot the same disk standalone 3x, reusing this project's own
+unmodified `InstallVm`/`inject_test_only_session_config`/`log_into_sddm`, no
+code changed): `plasmashell` never starts at all; `kwin_wayland` starts,
+crashes (`eglInitialize failed` / `EGL_NOT_INITIALIZED` /
+`"Opening render device for /dev/dri/card0 failed"`, a real coredump every
+time) and is auto-restarted 5+ times in under 7 seconds, then stops being
+restarted and never comes back. The journal also shows a separate, real
+systemd transaction conflict mid-startup ("destructive transaction" errors
+on `plasma-workspace-wayland.target`/`plasma-kwin_wayland.service`).
+
+Checked, and found identically absent regardless of source: `systemctl
+--user show-environment` 5-8s after a successful login contains NONE of
+`LIBGL_ALWAYS_SOFTWARE`/`MESA_LOADER_DRIVER_OVERRIDE` (this run's own
+injected vars) NOR `GTK_THEME`/`GTK_MODULES` (the REAL product's own
+`15-gtk-theme.sh`/`20-gtk-appmenu.sh`, shipped via `/etc/skel` since before
+today, unrelated to anything injected). Two explanations could not be fully
+distinguished from read-only evidence alone: (a) the
+`~/.config/plasma-workspace/env/*.sh` sourcing-into-systemd-environment
+mechanism is broken in general on this build (would affect every real
+user's global menu and GTK theming, not just this harness), or (b) the
+missing vars are downstream collateral of the same session-startup sequence
+already being wrecked by kwin's own crash-loop. One side investigation
+(whether these `.sh` files need the executable bit - `harness/vm/
+build_rootfs.sh` had, oddly, always `chmod 0755`'d them specifically, unlike
+every other skel file) was checked against public KDE/Gentoo documentation
+and forum reports and found NOT to be the cause: these files are sourced,
+not executed, and the executable bit is not required for that - ruled out,
+not left open.
+
+**Decided, 2026-10-16 (project owner's explicit choice, `AskUserQuestion`,
+among three options including "pin mkarchiso's build for reproducibility
+first" and "stop for the day"): move all three files' environment-variable
+delivery off `~/.config/plasma-workspace/env/*.sh` entirely, onto systemd's
+own `~/.config/environment.d/*.conf` mechanism (`environment.d(5)`).**
+`environment.d` is read directly by the `systemd --user` manager before ANY
+user unit (including `plasma-kwin_wayland.service`) starts, independent of
+Plasma's own ad-hoc startup script and whatever timing or sequencing issue
+(a) or (b) above actually was - this fixes the problem regardless of which
+hypothesis is true, and if (a), also restores the real product's own
+global-menu and GTK-theming features for real users, not only this harness.
+
+Implemented: `packages/kuura-shell/skel/.config/plasma-workspace/env/
+15-gtk-theme.sh.in` and `20-gtk-appmenu.sh` moved to
+`.config/environment.d/15-gtk-theme.conf.in` and `20-gtk-appmenu.conf`
+(plain `KEY=VALUE`, no `export`, per `environment.d(5)` syntax);
+`packages/kuura-shell/PKGBUILD`'s install block updated to match.
+`harness/vm/guest/skel/.config/plasma-workspace/env/10-vm-rendering.sh` and
+`20-gtk-appmenu.sh` (the pre-baked screenshot-harness image's own copies)
+moved the same way to `.config/environment.d/10-vm-rendering.conf` and
+`20-gtk-appmenu.conf`; `harness/vm/build_rootfs.sh`'s now-unnecessary
+`chmod 0755` on the old `env/*.sh` glob removed (`environment.d` files are
+parsed as data, never sourced or executed). `harness/install/wizard.py`'s
+`_TEST_ONLY_SESSION_FILES` and `inject_test_only_session_config()`'s
+docstring updated to the new destination path and this incident.
+
+Verified: `pytest -q` (938 passed, 7 skipped, no regression), `ruff check .`
+(clean), `python tools/check_forbidden_terms.py` (clean, exit 0). A real
+rebuild + `harness.install.run` pass to confirm this actually fixes the
+`kwin_wayland` crash-loop (or at least restores the environment variables,
+which may or may not be sufficient on its own if the crash's real cause
+turns out to be something else, e.g. the separately-flagged, unconfirmed
+package-version-drift concern below) is the next step - not yet run as of
+this paragraph.
+
+**Separate, standing concern raised alongside this finding, not yet acted
+on:** `mkarchiso` in the `kuura-arch-build` environment runs bare-metal on
+the host, against that host's own system `pacman.conf`/mirror, NOT inside
+the archive-pinned build image this document otherwise describes for
+reproducibility. Today's rebuild was a genuinely fresh, from-scratch package
+resolution (869 packages, forced by clearing caches to fix the two
+infrastructure bugs above), so if that host's mirror is a live/rolling one
+rather than the pinned archive snapshot, package versions (confirmed via
+`pacman -Q` on the installed disk: `mesa 1:26.2.3-1`, `kwin 6.7.5-1`, kernel
+`7.2.6.arch2-1`) could differ from whatever combination last booted without
+crashing - plausible but NOT confirmed as the actual cause of the
+`kwin_wayland` crash (no prior run's exact package versions were available
+to diff against). Flagged for the project owner as a real, independent gap
+between this document's reproducibility claim and this one environment's
+actual practice, regardless of whether it turns out to be related to
+today's crash.
+
+### 2026-10-16, continued again: the environment.d fix confirmed, but exposed a worse crash
+
+A rebuild with the `environment.d` fix above confirmed it works exactly as
+designed: `systemctl --user show-environment` on the real failing disk now
+genuinely shows all four variables (`LIBGL_ALWAYS_SOFTWARE`,
+`MESA_LOADER_DRIVER_OVERRIDE`, `GTK_THEME`, `GTK_MODULES`) - resolving
+hypothesis (a) vs (b) from the previous entry in favour of (a): this
+confirms the old `~/.config/plasma-workspace/env/*.sh` mechanism really was
+failing in general on this build, not just as kwin-crash collateral.
+
+But the install-verify run that followed failed WORSE than before:
+`"the desktop shell did not start"`, `0/0` states, past even the
+`120s wait_for_desktop` timeout - previously (with the vars not landing at
+all) `plasmashell` eventually came up despite the crash-loop; now it never
+does. Root-caused via the same read-only diagnostic technique (reboot the
+same disk standalone, no code changes, pull `journalctl`/`systemctl --user
+show-environment` via the guest agent): `kwin_wayland` starts and segfaults
+on a tight, continuous respawn loop for the full observation window, always
+at the identical spot (`eglInitialize failed "EGL_NOT_INITIALIZED"` ->
+`Opening render device for /dev/dri/card0 failed` ->
+`KWin::RenderDevice::eglDisplay()` -> SIGSEGV), with `plasmashell`/
+`startplasma` never once appearing in `pgrep` during the whole window.
+
+**Orchestrator's own analysis (research, not guessed) before bringing this
+back to the project owner:** the very first successful install-verify run,
+long before this file (or any rendering override) existed, already reached
+a working desktop via `kwin_wayland`'s own default hardware/software
+fallback on this exact `-device VGA`/bochs-drm QEMU configuration - the
+*only* defect that run had was cosmetic (opaque panel/dock instead of this
+project's translucent "frost" material), never a crash. That is direct
+evidence kwin's own default fallback already handles "no GPU here"
+correctly on this VM without any override at all. The thing that is new
+today, and that was never present during that first working run, is
+`MESA_LOADER_DRIVER_OVERRIDE=kms_swrast` forcing Mesa's DRI loader to one
+specific driver - plausibly bypassing whatever auto-detection path
+`kwin_wayland`'s own default behaviour relies on, in a way this kwin/Mesa
+version combination (kwin 6.7.5, mesa 1:26.2.3-1) cannot recover from
+(it segfaults instead of falling back, which may itself be a KWin
+regression/bug independent of this project, but is not something this
+project can fix upstream).
+
+**Decided, 2026-10-16 (project owner's explicit choice, `AskUserQuestion`,
+among four options including "add permanent journal/kwin-log diagnostics to
+the harness first" and "stop for the day"): drop
+`MESA_LOADER_DRIVER_OVERRIDE=kms_swrast` from
+`harness/vm/guest/skel/.config/environment.d/10-vm-rendering.conf`, keep
+only `LIBGL_ALWAYS_SOFTWARE=1`** - the cheaper, better-evidenced experiment,
+on the reasoning above. Implemented (small, mechanical, done directly by the
+orchestrator rather than delegated - see that file's own updated header
+comment for the full reasoning).
+
+**CONFIRMED FIXED**, independently re-verified by the orchestrator (not
+just the delegated agent's claim): a fresh `harness.install.run` reached
+all 22 states with real captured frames and `error: None` - no crash, no
+timeout, `wait_for_desktop()` succeeded. The orchestrator independently
+viewed the actual `light/desktop-empty.png` output, its golden, and the
+diff image directly: the panel and dock genuinely render as soft,
+translucent "frost" material in both - the original defect this override
+existed to fix is also confirmed gone, not just "no crash."
+
+**Remaining 0/22 pixel-diff pass rate is a separate, pre-existing issue,
+not a new regression from this incident.** Visual inspection of the diff
+image found the large red panel/dock region is driven by two concrete,
+measurable default-state differences between a real Calamares install and
+the pre-baked screenshot-harness test image: the golden's system tray has
+one more icon (a screen/share-type indicator absent on the real install)
+and its volume icon shows muted, where the real install's is unmuted. This
+matches the project's own 2026-10-15 memory note ("14/22 pikseliero
+avoinna") recorded before this crash investigation ever started - this is
+the project's already-known, separately-tracked pixel-diff backlog
+resurfacing now that the harness can reach the diff-pass again, not
+something this incident introduced. Treat it as its own follow-up task
+(tray/indicator default-state inventory between a real install and the test
+image), not a blocker on this incident being closed.
+
 ## DoD (this project's concrete interpretation)
 
 From `distro-tyonkulku.md` §3: "ISO bootaa UEFI + BIOS, asentuu VM:ään ja

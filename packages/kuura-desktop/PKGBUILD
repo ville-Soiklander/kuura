@@ -84,4 +84,30 @@ depends=(
     # Fonts
     'inter-font'
     'ttf-jetbrains-mono'
+    # Install-verify support: harness/states.toml's `notification`, `app-menu-gtk`,
+    # `gtk4-widget-factory` and `browser-window` states each run a real program that
+    # was previously only present on the screenshot harness's own pre-baked test
+    # image, not on a real Calamares install - harness/install/run.py's diff-pass
+    # against a real target found all four missing (docs/ISO_CONTRACT.md's
+    # "Installed-system verification" section, 2026-10-14/15). Project owner's
+    # explicit choice (`AskUserQuestion`): ship the real tools rather than excluding
+    # these four states from install-verify.
+    'libnotify'       # notify-send, for the `notification` state
+    'mousepad'        # GTK3 text editor, for the `app-menu-gtk` state
+    'gtk4-demos'      # ships gtk4-widget-factory, for that state of the same name
+    # harness-browser (the `browser-window` state's helper) and its static test page
+    # and throwaway profile - a package of this monorepo, built from the same
+    # DISTRO_NAME variable as this package's own name. See
+    # packages/kuura-harness-support/PKGBUILD's own header comment for why this is
+    # its own package and what it deliberately does NOT touch (kuura-firefox's
+    # system-wide policies.json).
+    "${DISTRO_NAME}-harness-support"
+    # Global menu for classic GTK3 GtkMenuBar apps (the panel's own Global Menu
+    # widget needs this GTK module loaded into each such app's own process - see
+    # packages/kuura-shell/skel/.config/environment.d/20-gtk-appmenu.conf's
+    # own header comment). Promoted from the screenshot harness's test-image-only
+    # discovery to a real product feature 2026-10-16 (project owner's explicit
+    # choice, `AskUserQuestion`): this is a real, desired desktop feature for
+    # every GTK3 app with a menu bar, not merely a test convenience.
+    'appmenu-gtk-module'
 )

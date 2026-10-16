@@ -184,12 +184,15 @@ stage_context() {
     # checkout on a Windows drive or with an unusual umask reports odd modes (every
     # directory world-writable, for example). COPY of guest/overlay/ onto / would carry
     # such a mode to /usr, /etc and so on. Directories and files get fixed modes; only
-    # the scripts are executable.
+    # the real scripts are executable - guest/skel/.config/environment.d/*.conf (moved
+    # here from plasma-workspace/env/*.sh on 2026-10-16, see that directory's own
+    # 10-vm-rendering.conf header comment) is systemd's own environment.d(5) config
+    # syntax, parsed directly by systemd rather than sourced or executed, so it stays
+    # at the plain 0644 the blanket chmod below already gives every file.
     find "$TMP_DIR/ctx/guest" -type d -exec chmod 0755 {} +
     find "$TMP_DIR/ctx/guest" -type f -exec chmod 0644 {} +
     chmod 0755 -- "$TMP_DIR"/ctx/guest/make-sample-tree.sh \
-        "$TMP_DIR"/ctx/guest/overlay/usr/local/bin/* \
-        "$TMP_DIR"/ctx/guest/skel/.config/plasma-workspace/env/*.sh
+        "$TMP_DIR"/ctx/guest/overlay/usr/local/bin/*
 }
 
 # Helper script, run inside a container from the pristine base image. FIXED text: every

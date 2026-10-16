@@ -1,0 +1,29 @@
+# Read by the systemd --user manager at session start (systemd's own
+# environment.d(5) mechanism), BEFORE any user unit - including
+# plasma-kwin_wayland.service - is started. This replaces this file's former
+# home at ~/.config/plasma-workspace/env/15-gtk-theme.sh.in, which relied on
+# Plasma's own ad-hoc startup script to source *.sh files and import the
+# result into systemd; that path was found unreliable in a real
+# harness.install.run boot (docs/ISO_CONTRACT.md "Installed-system
+# verification", 2026-10-16): none of this directory's exported variables
+# reached `systemctl --user show-environment`, whether a crash-cascade
+# collateral or a standing general issue. environment.d is parsed directly by
+# systemd itself, with no dependency on Plasma's own startup script or its
+# timing, so it is not exposed to that failure mode either way.
+#
+# WHY GTK_THEME itself is still needed: confirmed live (docs/SHELL_CONTRACT.md's
+# "GTK4/libadwaita" section, "Revised 2026-10-07") that GTK4 apps in this
+# image do NOT honour ~/.config/gtk-4.0/settings.ini's gtk-theme-name under
+# normal conditions - org.freedesktop.portal.Settings's
+# org.gnome.desktop.interface/gtk-theme answers "Adwaita" unconditionally,
+# which GTK4's own portal integration consults ahead of the local file.
+# GTK_THEME is GTK's own documented environment-variable override: set, it
+# bypasses both settings.ini and the portal lookup unconditionally.
+#
+# No "export" keyword and no quoting (unlike the old env/*.sh form): this is
+# systemd's own KEY=VALUE config syntax, not a shell script - see
+# environment.d(5). @NAME@ is substituted with $DISTRO_NAME at package-build
+# time by this package's own PKGBUILD (same sed+mktemp pattern already used
+# for the gtk-3.0/gtk-4.0 settings.ini.in templates and
+# Kvantum/kvantum.kvconfig.in in the same package).
+GTK_THEME=@NAME@

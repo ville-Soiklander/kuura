@@ -330,6 +330,13 @@ experiment, now shipped as a normal product file instead of a manual test overri
 spinbutton`, `popover > contents, menu` and `.card` (the second gap the forced experiment
 found: these surfaces sat on the window background with no border at all).
 
+**Moved 2026-10-16:** this file (and `20-gtk-appmenu.sh` alongside it) relocated from
+`~/.config/plasma-workspace/env/*.sh` to `~/.config/environment.d/*.conf` - see
+"Installed-system verification" below for why (a real install-verify boot found the
+`plasma-workspace/env/` sourcing-into-systemd-environment path unreliable). Same variable,
+same value, read by systemd itself before any user unit starts instead of sourced by
+Plasma's own startup script.
+
 **It works — confirmed on `gtk4-widget-factory` with pixel sampling, no `GTK_THEME`
 override anywhere.** A fresh `make repo` → `make vm-image` → capture cycle (no manual
 environment tampering, just the shipped package) produced, for the first time, real
@@ -399,6 +406,22 @@ All three are shipped, uncommitted, exactly as built — this document is not re
 a fix or a revert, only reporting what a real rebuild with the human-approved change
 produced, including a plausible but unconfirmed mechanism for #1 and two genuinely open
 questions (#2, #3) a human should see before this goes further.
+
+**#1 investigated and fixed, 2026-10-13** — the "missing standard GTK named colour"
+mechanism above was explicitly UNCONFIRMED when written, and a live reproduction
+(real GTK3 + GtkSourceView4, mousepad's own actual widget stack, driven headless under
+Xvfb with the project's real generated CSS forced via `GTK_THEME`) DISPROVED it: adding
+`@define-color theme_base_color ...;` changed nothing in the rendered pixels. The real
+cause was simpler — `design/generators/gtk_css.py` never emitted any rule at all for the
+CSS node a `GtkTextView`/`GtkSourceView` content area actually resolves through
+(`.view, iconview, .view text, iconview text, textview text`, selector list copied
+verbatim from GTK's own upstream Adwaita stylesheet), the same category of gap as the
+button/entry/popover/.card fixes already described elsewhere in this file. Fixed the
+same way, reusing `token_surface`; full investigation and the fix itself are in that
+generator's own module docstring ("REVISED AGAIN (2026-10-13)"). Still open: a real
+`make shots`/`harness.shots.capture --states app-menu-gtk` run against the actual
+QEMU-booted desktop, for the authoritative pixel diff and a human's `goldens-accept`
+decision — the Xvfb reproduction is strong direct evidence but is not that harness.
 
 (Capture methodology note: the previous revision found that capturing
 `gtk4-widget-factory` then immediately switching mode in the SAME boot made every

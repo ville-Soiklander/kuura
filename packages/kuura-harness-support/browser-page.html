@@ -1,0 +1,53 @@
+<!doctype html>
+<!--
+  Fixed page for the `browser-window` state of the screenshot harness. Everything on it
+  is static: no script, no web font, no image, no date, no animation. Colours come from
+  the system colour keywords, so the page follows the light/dark scheme of the desktop.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sample page</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      margin: 0;
+      padding: 40px 56px;
+      font-family: "Inter", sans-serif;
+      font-size: 16px;
+      line-height: 1.55;
+      background: Canvas;
+      color: CanvasText;
+    }
+    h1 { margin: 0 0 8px; font-size: 32px; font-weight: 600; }
+    p { max-width: 42em; }
+    .card {
+      margin: 24px 0;
+      padding: 16px 20px;
+      max-width: 36em;
+      border: 1px solid GrayText;
+      border-radius: 10px;
+    }
+    table { border-collapse: collapse; margin-top: 12px; }
+    th, td { padding: 6px 18px 6px 0; text-align: left; }
+    th { font-weight: 600; border-bottom: 1px solid GrayText; }
+    code { font-family: "JetBrains Mono", monospace; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Sample page</h1>
+  <p>This page is stored on the local disk and used to check how a web browser looks
+     on the desktop. It contains only static text.</p>
+  <div class="card">
+    <strong>A short list</strong>
+    <table>
+      <tr><th>Name</th><th>Kind</th><th>Size</th></tr>
+      <tr><td>alpha</td><td>text</td><td>4 KB</td></tr>
+      <tr><td>beta</td><td>image</td><td>128 KB</td></tr>
+      <tr><td>gamma</td><td>folder</td><td>&mdash;</td></tr>
+    </table>
+  </div>
+  <p>Inline code looks like <code>example --flag value</code> and links look
+     <a href="#top">like this</a>.</p>
+</body>
+</html>
