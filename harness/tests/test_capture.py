@@ -740,8 +740,10 @@ def test_build_command_is_a_list_with_the_required_devices(tmp_path: Path) -> No
     assert all(isinstance(part, str) for part in command)
     joined = " ".join(command)
     for expected in ("-accel kvm", "-cpu host", "-snapshot", "-nic none", "-display none", "-m 4096", "-smp 4",
-                     "virtio-vga,xres=2560,yres=1440", "usb-tablet", "base=2026-09-25T12:00:00,clock=vm", "-no-reboot"):
+                     "VGA,xres=2560,yres=1440", "usb-tablet", "base=2026-09-25T12:00:00,clock=vm", "-no-reboot"):
         assert expected in joined, expected
+    # Not virtio-vga: it segfaults qemu-system-x86_64 on the build host (vm.py docstring).
+    assert "virtio-vga" not in joined
     assert any(part.startswith("unix:") and part.endswith("qmp.sock,server=on,wait=off") for part in command)
     assert any("qga.sock" in part for part in command)
 

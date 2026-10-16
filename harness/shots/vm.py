@@ -6,12 +6,22 @@ QMP and guest-agent channels, waits until the agent inside the guest answers and
 EVERY exit path (normal end, exception, Ctrl-C, failed boot), stops QEMU, kills its
 whole process group and removes the private runtime directory.
 
-Design decisions (all inherited from the feasibility spike, see harness/spike/README.md):
+Design decisions (all inherited from the feasibility spike, see harness/spike/README.md,
+except the display device - see below):
 
 * KVM with ``-cpu host``: software emulation of a Plasma boot is far too slow.
-* ``virtio-vga`` at the configured resolution, no ``-display`` and no GL: the guest
-  renders in software and QEMU only receives finished frames; there is no host GPU
-  involved anywhere.
+* ``VGA`` (legacy, NOT ``virtio-vga``) at the configured resolution, no ``-display`` and
+  no GL: the guest renders in software and QEMU only receives finished frames; there is
+  no host GPU involved anywhere. The spike and this module originally used
+  ``virtio-vga``; on 2026-10-16 it started to segfault ``qemu-system-x86_64`` (signal
+  11) on this project's WSL2 build host on every ``-kernel``/``-initrd`` boot, while the
+  same kernel, initramfs and image booted fine without it. The cause was not
+  established: downgrading QEMU from 11.1.1-4 to 11.0.3-1 did not help, switching the
+  device did. ``harness/install/boot.py`` already used ``-device VGA`` (for a different
+  segfault, in the VGA BIOS ROM on a cold ``-cdrom`` boot). After the switch, 18 of the
+  22 states matched goldens captured with ``virtio-vga``; the other 4 differed only
+  inside application text/list views, from an unrelated theme change. Resolution,
+  scale, colours and the panel/dock blur were unchanged.
 * ``usb-tablet`` (absolute pointer) so cursor positions are well defined.
 * ``-nic none``: the guest has no network.
 * ``-snapshot``: all writes go to a throw-away overlay, so the image is never modified
@@ -140,7 +150,8 @@ def build_command(config: VmConfig, run_dir: Path) -> list[str]:
         "-snapshot",
         "-drive", f"file={_escape(image / 'root.img')},if=virtio,format=raw",
         "-vga", "none",
-        "-device", f"virtio-vga,xres={width},yres={height}",
+        # NOT virtio-vga: it segfaults qemu-system-x86_64 on the build host (module docstring).
+        "-device", f"VGA,xres={width},yres={height}",
         "-device", "usb-ehci", "-device", "usb-tablet",
         "-nic", "none",
         "-display", "none",

@@ -99,11 +99,14 @@ qemu-system-x86_64 -machine q35 -accel kvm -cpu host -smp 4 -m 4096 \
     -kernel .build/vm/vmlinuz -initrd .build/vm/initramfs.img \
     -append "root=/dev/vda rw console=ttyS0 net.ifnames=0" \
     -snapshot -drive file=.build/vm/root.img,if=virtio,format=raw \
-    -vga none -device virtio-vga,xres=2560,yres=1440 -device usb-ehci -device usb-tablet \
+    -vga none -device VGA,xres=2560,yres=1440 -device usb-ehci -device usb-tablet \
     -nic none -rtc base=2026-09-25T12:00:00,clock=vm -vnc 127.0.0.1:0 -serial stdio
 ```
 
 The screen must be 2560x1440: the output scale is stored for exactly that monitor.
+
+`-device VGA`, not `virtio-vga`: the latter segfaults `qemu-system-x86_64` on this
+project's build host (see `harness/shots/vm.py`'s module docstring).
 
 ## Determinism settings and why
 
