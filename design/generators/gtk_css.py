@@ -53,6 +53,45 @@ already gained `background-color: @token_surface;` above (not to `window,
 `tooltip`, which keeps its own distinct background/text pair without needing
 a border to read as a separate surface).
 
+REVISED AGAIN (2026-10-13): docs/SHELL_CONTRACT.md's "app-menu-gtk" regression
+(mousepad's text-editing area rendering flat grey `#eeeeec` instead of white
+once GTK_THEME made this file mousepad's sole active GTK3 stylesheet) named a
+LIKELY but explicitly UNCONFIRMED cause: that this file only ever defines its
+own `@token_*` custom properties, never GTK's OWN standard named colours
+(`@theme_base_color` etc.) that GTK's built-in default CSS supposedly uses for
+unstyled nodes like a GtkTextView's `view` node. Investigating this directly
+(real GTK3 Adwaita source read from upstream, then reproduced live: GTK3 +
+GtkSourceView4 - mousepad's own real widget stack, confirmed from mousepad's
+published source - driven headless under Xvfb with GTK_THEME forced at an
+otherwise-unmodified copy of this file's own real generated output) DISPROVED
+that hypothesis: adding `@define-color theme_base_color ...;` - even pointed
+at an arbitrary, clearly-distinguishable probe colour - changed NOTHING in
+the rendered pixels. GtkSourceView's content-area background is not resolved
+through that named colour at all in practice. What DID fix it, verified the
+same live way: adding an explicit rule for the actual CSS node Adwaita itself
+targets for this purpose - `.view, iconview, .view text, iconview text,
+textview text` (selector list read verbatim from GTK's own upstream compiled
+Adwaita stylesheet, gtk/theme/Adwaita/gtk-contained.css on the gtk-3-24
+branch) - the exact same category of gap as the two REVISED sections above,
+not a new one: this file simply never emitted ANY rule for that node, same as
+it once didn't for button/entry/popover/.card. Without a matching rule here,
+and with no Adwaita merge once GTK_THEME makes this file the SOLE active
+theme, GTK3 + GtkSourceView falls through to ITS OWN non-CSS-named-colour
+hardcoded content-area default (the observed `#eeeeec`) - confirmed NOT the
+same fallback path a plain GtkTextView or GTK4 takes on this same unmodified
+file (both instead show the `window` background bleeding through via normal
+CSS transparency/inheritance, a subtler but equally real instance of the same
+underlying gap, confirmed live under GTK4 too with the fix below). Fixed the
+same minimal, already-established way as both REVISED sections above: one
+more rule block reusing `token_surface` - already the "raised content
+surface" token used by button/entry/popover/.card for exactly the same
+semantic (a GtkTextView/GtkSourceView's editing area is exactly that kind of
+surface). No border added (Adwaita's own real rule for this selector group
+does not use one either, confirmed from the same upstream source), and no
+`color` property added (the `*` rule already sets `color: @token_text;`,
+which inherits into this node same as everywhere else - confirmed live, text
+rendered correctly in every reproduction above).
+
 Exact output (nothing else, single trailing newline). Placeholders in {braces}
 are replaced by the value named; "<key>" lines repeat for every key of
 tokens["color"][mode] in ascending alphabetical key order.
@@ -80,6 +119,9 @@ entry, spinbutton {
   background-color: @token_surface;
   border: 1px solid @token_separator;
   border-radius: {radius.field}px;
+}
+.view, iconview, .view text, iconview text, textview text {
+  background-color: @token_surface;
 }
 tooltip {
   background-color: @token_tooltip_bg;
@@ -181,6 +223,21 @@ def render(tokens: dict, mode: str = "light", name: str = "Theme") -> str:
     lines.append("  background-color: @token_surface;")
     lines.append("  border: 1px solid @token_separator;")
     lines.append(f'  border-radius: {tokens["radius"]["field"]}px;')
+    lines.append("}")
+    # `.view`/`textview text`/`iconview` is the CSS node a GtkTextView's or
+    # GtkSourceView's own editing/content area resolves through (selector
+    # list copied verbatim from GTK's own upstream Adwaita stylesheet). This
+    # file never emitted a rule for it - same category of gap as button/
+    # entry/popover/.card above, just missed until the live GTK_THEME-forced
+    # mousepad capture in docs/SHELL_CONTRACT.md surfaced it. No border (real
+    # Adwaita doesn't give this node one either) and no `color` (already
+    # inherited from `*` above) - see module docstring, second "REVISED
+    # AGAIN" section, for the live reproduction that found and confirmed
+    # this fix (and ruled out the originally-suspected cause: a missing
+    # standard GTK named colour such as `@theme_base_color` - defining that
+    # alone was confirmed to change nothing).
+    lines.append(".view, iconview, .view text, iconview text, textview text {")
+    lines.append("  background-color: @token_surface;")
     lines.append("}")
     # Tooltip gets its own dedicated background/text pair - always a small
     # dark flyout in both light and dark mode by design - overriding the

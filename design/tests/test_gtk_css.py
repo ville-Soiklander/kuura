@@ -127,6 +127,18 @@ class TestGtkCssRender:
             "  border-radius: 8px;\n"
             "}\n"
         ) in result
+        # REVISED (2026-10-13): fixes the "app-menu-gtk" (mousepad) regression
+        # documented in docs/SHELL_CONTRACT.md - a GtkTextView/GtkSourceView's
+        # own content area resolves through this exact node (selector list
+        # copied verbatim from GTK's own upstream Adwaita stylesheet), which
+        # this file never had a rule for (see gtk_css.py module docstring,
+        # second "REVISED AGAIN" section, for the live reproduction that
+        # found this and ruled out the originally-suspected cause).
+        assert (
+            ".view, iconview, .view text, iconview text, textview text {\n"
+            "  background-color: @token_surface;\n"
+            "}\n"
+        ) in result
         assert (
             "tooltip {\n"
             "  background-color: @token_tooltip_bg;\n"
@@ -247,6 +259,11 @@ class TestGtkCssRender:
             "}\n"
         ) in result
         assert (
+            ".view, iconview, .view text, iconview text, textview text {\n"
+            "  background-color: @token_surface;\n"
+            "}\n"
+        ) in result
+        assert (
             "tooltip {\n"
             "  background-color: @token_tooltip_bg;\n"
             "  color: @token_tooltip_text;\n"
@@ -331,6 +348,39 @@ class TestGtkCssRender:
                     f"Expected colour reference {reference!r} missing in {mode} mode - "
                     "this is the exact regression the 2026-10 fix addresses"
                 )
+
+    def test_render_real_tokens_textview_node_styled(self):
+        """
+        Regression test for the "app-menu-gtk" (mousepad) bug documented in
+        docs/SHELL_CONTRACT.md: a GtkTextView's/GtkSourceView's own content
+        area (the `.view`/`textview text`/`iconview` CSS node - selector list
+        copied verbatim from GTK's own upstream Adwaita stylesheet) must have
+        an explicit `background-color: @token_surface;` rule, the same way
+        button/entry/popover/.card already do. Before the 2026-10-13 fix this
+        file emitted no rule for that node at all, which a live GTK3 +
+        GtkSourceView4 reproduction (mousepad's own real widget stack,
+        confirmed from mousepad's published source) showed renders as GTK's
+        own hardcoded grey content-area default (`#eeeeec`), NOT as a result
+        of a missing standard GTK named colour such as `@theme_base_color` -
+        that originally-suspected cause was tested directly and disproven
+        (defining it, even pointed at an unrelated probe colour, changed
+        nothing in the rendered pixels).
+        """
+        from design.validate import load_tokens
+
+        tokens_path = Path(__file__).parent.parent / "tokens.json"
+        tokens = load_tokens(tokens_path)
+
+        for mode in ("light", "dark"):
+            result = render(tokens, mode=mode, name="Theme")
+            assert (
+                ".view, iconview, .view text, iconview text, textview text {\n"
+                "  background-color: @token_surface;\n"
+                "}\n"
+            ) in result, (
+                f"Missing .view/textview content-area rule in {mode} mode - "
+                "this is the exact regression the 2026-10-13 fix addresses"
+            )
 
     def test_render_changing_token_changes_output(self, tmp_path):
         """Test that changing a color token changes the output."""

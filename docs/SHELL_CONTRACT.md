@@ -423,6 +423,14 @@ generator's own module docstring ("REVISED AGAIN (2026-10-13)"). Still open: a r
 QEMU-booted desktop, for the authoritative pixel diff and a human's `goldens-accept`
 decision — the Xvfb reproduction is strong direct evidence but is not that harness.
 
+**Closed 2026-10-16.** A real `harness.shots.capture` run (all 22 states, QEMU-booted
+guest image built from a tree containing this fix) showed the mousepad text area white
+again. Against the then-committed goldens, which had been captured with the grey bug in
+place, it failed only `app-menu-gtk` and `gtk4-widget-factory` (both modes), with the
+difference confined to the text/list views. Every other state passed. The project owner
+reviewed the report and accepted all 22 captures as the new goldens, committed together
+with this fix.
+
 (Capture methodology note: the previous revision found that capturing
 `gtk4-widget-factory` then immediately switching mode in the SAME boot made every
 following dark-mode state fail to settle. This session's regression capture again used
