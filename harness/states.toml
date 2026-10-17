@@ -175,7 +175,7 @@ steps = [
 # traditional menu bar), so the project's own documented fallback applies - a small,
 # explicitly test-only GTK application, following harness-browser's precedent
 # (Mousepad + appmenu-gtk-module, see harness/vm/Containerfile and
-# guest/skel/.config/environment.d/20-gtk-appmenu.conf).
+# packages/kuura-shell/skel/.config/environment.d/20-gtk-appmenu.conf).
 #
 # STILL OPEN, reported rather than papered over (mirrors the KWin decoration "Known
 # issue" in docs/SHELL_CONTRACT.md): live testing confirms Mousepad's OWN in-window

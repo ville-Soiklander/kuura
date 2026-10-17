@@ -12,7 +12,8 @@ this grew out of is `harness/spike/`.
 | `Containerfile` | The guest system: the pinned archive snapshot, the metapackage from the signed repository, test-only packages, deterministic configuration. |
 | `build_rootfs.sh` | Podman build, `podman export`, `mke2fs -d` in a helper container. Produces `root.img`, `vmlinuz`, `initramfs.img` in `.build/vm/`. No mounts, no root. |
 | `guest/mkinitcpio-vm.conf` | Initramfs modules for direct kernel boot (no `autodetect`, so the result does not depend on the build machine). |
-| `guest/skel/` | Configuration files of the desktop user (copied to `/etc/skel`, hence to the home directory). Plain data files. |
+| `guest/skel/` | Configuration files of the desktop user (copied to `/etc/skel`, hence to the home directory). Plain data files. Only files the product does NOT ship: the copy runs after the product is installed and would replace a same-named product file. |
+| `guest/skel-merge/` | INI fragments for files the product ALSO ships (`.config/kdeglobals`, `.config/kscreenlockerrc`). Not copied: `build_rootfs.sh` turns them into a script (`harness/skelmerge.py`) that the Containerfile runs with `kwriteconfig6`, so the test-only keys are merged key by key into the product's file. |
 | `guest/templates/` | Data files that need the home directory of the user; the Containerfile fills in `@HOME@`. |
 | `guest/overlay/` | System files copied onto `/`: helper programs, the browser policy, the test page. |
 | `guest/make-sample-tree.sh` | Creates the fixed sample folders and files (fixed modification times) at build time. |
@@ -116,9 +117,9 @@ switched off once to see the difference.
 
 | Setting | Where | Why |
 |---|---|---|
-| Animations off | `skel/.config/kdeglobals` (`AnimationDurationFactor=0`) | Frames are compared; a state must not be caught mid-animation. |
-| Text cursor does not blink | `kdeglobals` (`CursorBlinkRate=0`) | Control: with the value 1000 two consecutive screenshots of the search field alternate between two pictures. |
-| No screen locker | `kscreenlockerrc` | A locked screen is not the desktop. |
+| Animations off | `skel-merge/.config/kdeglobals` (`AnimationDurationFactor=0`, merged into the product file) | Frames are compared; a state must not be caught mid-animation. |
+| Text cursor does not blink | `skel-merge/.config/kdeglobals` (`CursorBlinkRate=0`) | Control: with the value 1000 two consecutive screenshots of the search field alternate between two pictures. |
+| No screen locker | `skel-merge/.config/kscreenlockerrc` | A locked screen is not the desktop. |
 | Never dim, blank or suspend | `powerdevilrc` | A capture session can outlast the default idle timeouts. The Power Management page of System Settings shows "Do nothing", "Never", "Never". |
 | No file indexer | `baloofilerc` | Background CPU load and index-dependent results. |
 | No splash screen | `ksplashrc` | One less moving part at start-up. |
@@ -132,7 +133,7 @@ switched off once to see the difference.
 | Fixed sample folder tree, fixed modification times, empty Desktop | `make-sample-tree.sh`, `skel/.config/user-dirs.dirs`, `overlay/etc/xdg/user-dirs.conf` | The file manager shows real content that never changes; the desktop shows the Desktop folder, so it stays empty. The tool that would create folders at login is switched off. |
 | Fixed places panel, disk section hidden | `templates/user-places.xbel` | The disk entry shows a usage bar that follows the size of the image. |
 | Browser profile made fresh on every start; first-run, update, telemetry, restore and notification prompts off; caret and animations off; software rendering | `overlay/usr/local/share/harness/firefox-profile/user.js`, `overlay/usr/lib/firefox/distribution/policies.json`, `harness-browser` | A first launch is the only launch that is always the same. |
-| GTK global menu export for the `app-menu-gtk` state | `skel/.config/environment.d/20-gtk-appmenu.conf` (`GTK_MODULES=appmenu-gtk-module`), `appmenu-gtk-module` package (`Containerfile`) | Needed for a classic GtkMenuBar app (Mousepad) to hand its menu to KDE's global-menu registrar at all - confirmed live: without it, Mousepad keeps its own in-window menu bar and no window ever registers with `com.canonical.AppMenu.Registrar`. Moved from `plasma-workspace/env/20-gtk-appmenu.sh` to `environment.d/` on 2026-10-16, see the row above. |
+| GTK global menu export for the `app-menu-gtk` state | the product's own `packages/kuura-shell/skel/.config/environment.d/20-gtk-appmenu.conf` (`GTK_MODULES=appmenu-gtk-module`), `appmenu-gtk-module` package (`Containerfile`) | Needed for a classic GtkMenuBar app (Mousepad) to hand its menu to KDE's global-menu registrar at all - confirmed live: without it, Mousepad keeps its own in-window menu bar and no window ever registers with `com.canonical.AppMenu.Registrar`. Moved from `plasma-workspace/env/20-gtk-appmenu.sh` to `environment.d/` on 2026-10-16, see the row above. |
 
 The clock in the panel is not made deterministic (the VM clock starts at a fixed date, but
 it advances): the comparison masks it (`docs/HARNESS_CONTRACT.md`). Two clean boots differ

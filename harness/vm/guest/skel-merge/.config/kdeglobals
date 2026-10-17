@@ -1,0 +1,7 @@
+# Test-only keys MERGED (key by key, via kwriteconfig6) into the product's own
+# /etc/skel/.config/kdeglobals; this file is never copied over it. WHY: the product
+# (packages/kuura-shell) ships this file too, and a wholesale copy would erase its
+# widgetStyle and LookAndFeelPackage keys. See harness/skelmerge.py.
+[KDE]
+AnimationDurationFactor=0
+CursorBlinkRate=0

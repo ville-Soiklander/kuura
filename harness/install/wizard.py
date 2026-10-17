@@ -57,7 +57,8 @@ from pathlib import Path
 from typing import Any
 
 from harness.install.boot import InstallVm
-from harness.shots.guest import GuestUser
+from harness import skelmerge
+from harness.shots.guest import RUNUSER, GuestUser
 from harness.shots.pngio import read_png
 
 #: Project root, two directories up from this file (harness/install/wizard.py ->
@@ -65,25 +66,15 @@ from harness.shots.pngio import read_png
 #: and harness/shots/capture.py already use for their own PROJECT_ROOT constants.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-#: Session configuration the screenshot harness's own pre-baked test image carries
-#: (harness/vm/guest/skel/, the same tree harness/vm/Containerfile's own
-#: ``COPY guest/skel/ /etc/skel/`` installs from) that is deliberately NOT part of
-#: any real product package - see inject_test_only_session_config's own docstring
-#: for why these two specifically, and docs/ISO_CONTRACT.md's "Installed-system
-#: verification" section for the project owner's decision (2026-10-16) that this
-#: is injected only for a verification run, never shipped. Each pair is
-#: (source path under harness/vm/guest/skel/, destination path under the desktop
-#: user's own home directory) - the two happen to be identical strings here, but
-#: are kept separate because they mean different things (a path relative to this
-#: repo vs. a path relative to a guest home directory) and nothing requires them
-#: to stay equal.
-_TEST_ONLY_SESSION_FILES: tuple[tuple[str, str], ...] = (
-    (".config/kwinrulesrc", ".config/kwinrulesrc"),
-    (
-        ".config/environment.d/10-vm-rendering.conf",
-        ".config/environment.d/10-vm-rendering.conf",
-    ),
-)
+#: Test-only files the screenshot harness image copies wholesale into /etc/skel
+#: (harness/vm/Containerfile ``COPY guest/skel/``). By rule it holds ONLY files the
+#: product does not ship itself (enforced by harness/tests/test_guest_skel.py), so
+#: writing every file in it to the desktop user's home reproduces the image. The
+#: file list is derived from the directory at call time so it cannot drift.
+_GUEST_SKEL_DIR = _PROJECT_ROOT / "harness" / "vm" / "guest" / "skel"
+
+#: Absolute path of ln in the guest (the agent's exec does no PATH lookup itself).
+_LN = "/usr/bin/ln"
 
 #: Login-name shape Calamares' own users module enforces (lowercase ASCII letters,
 #: digits, "-"/"_", starting with a letter) - checked here too so a bad value fails
@@ -607,105 +598,140 @@ def _sddm_password_field_visible(frame: Path) -> bool:
     return r > 240 and g > 240 and b > 240
 
 
+def _list_skel_files(skel_dir: Path) -> list[str]:
+    """
+    List every regular file below ``skel_dir`` as a POSIX path relative to it.
+
+    Args:
+        skel_dir: Root of the test-only skeleton tree.
+
+    Returns:
+        Sorted relative paths (deterministic write order).
+
+    Raises:
+        WizardError: the directory is missing or contains a symlink or a special
+            file (a link could make the harness read arbitrary host files).
+    """
+    if skel_dir.is_symlink() or not skel_dir.is_dir():
+        raise WizardError("the test-only skeleton directory is missing")
+    found: list[str] = []
+    for path in skel_dir.rglob("*"):
+        rel = path.relative_to(skel_dir).as_posix()
+        if path.is_symlink() or (not path.is_dir() and not path.is_file()):
+            raise WizardError(f"unsupported entry in the test-only skeleton: {rel!r}")
+        if path.is_file():
+            found.append(rel)
+    return sorted(found)
+
+
 def inject_test_only_session_config(
     vm: InstallVm,
     guest_user: GuestUser,
     log: Callable[[str], None] = lambda line: None,
+    skel_dir: Path = _GUEST_SKEL_DIR,
+    merge_entries: list[skelmerge.ConfigEntry] | None = None,
 ) -> None:
     """
-    Copy the screenshot harness's own test-only session files onto a real,
-    freshly-installed target, so the Runner diff-pass has a fair comparison
-    against goldens captured with this exact configuration in place.
+    Give a freshly installed target EXACTLY the test-only session configuration the
+    screenshot harness image carries, so the diff-pass compares real product
+    differences only.
 
-    Added 2026-10-16 after the first real diff-pass against goldens (once SDDM
-    login itself worked) showed every one of the 22 states failing by a large,
-    whole-frame margin, not a borderline anti-aliasing difference. Two real,
-    confirmed causes (not guessed - read directly from
-    harness/vm/guest/skel/.config/environment.d/10-vm-rendering.conf's own
-    header comment and harness/vm/guest/skel/.config/kwinrulesrc's own header
-    comment):
+    The shots image (harness/vm/Containerfile) is the real product plus three
+    test-only layers; this function applies the same three to the installed system:
 
-    - ``kwinrulesrc`` forces the file manager/System Settings/browser/GTK text
-      editor windows to a fixed 1000x600 geometry. Without it, those apps open
-      at their own natural default size on a real install, which never matches
-      the golden's staged, forced geometry - this is why files-window,
-      settings-window, browser-window and app-menu-gtk showed the largest
-      ratios (74-75%, 57%, 53%).
-    - ``10-vm-rendering.conf`` sets ``LIBGL_ALWAYS_SOFTWARE=1`` (the software
-      Mesa rasteriser) for the whole Plasma session. Without it, KWin starts
-      without an explicit software-rendering request on a display adapter
-      (``-device VGA``, see harness/install/boot.py's own module docstring for
-      why that adapter is required here) that has no real GPU behind it either
-      way - visually confirmed (orchestrator's own screenshot comparison on
-      ``desktop-empty``, the simplest state) that the panel/dock render fully
-      OPAQUE instead of this project's own translucent "frost" material, which
-      is present and correct on the goldens.
+    1. every regular file under ``harness/vm/guest/skel/`` is written to the same
+       relative path in the desktop user's home (kwinrulesrc fixed window sizes,
+       10-vm-rendering.conf software rendering, kwinoutputconfig.json output scale 2,
+       and the determinism files such as powerdevilrc, kwalletrc, ksplashrc,
+       plasmanotifyrc, baloofilerc, kxkbrc, plasma-localerc and user-dirs.dirs -
+       whatever the directory holds). The list is derived from the directory, never
+       hand-written, so it cannot drift from the image. By project rule that
+       directory holds only files the product does not ship (a file the product
+       also ships would replace the product's own version);
+    2. every ``harness/vm/guest/skel-merge/`` entry (skelmerge.load_fragments) is
+       merged key by key into the product's own file with kwriteconfig6, run AS THE
+       DESKTOP USER (a root run would leave a root-owned file in the home). This
+       runs after step 1 so a merge never races a wholesale copy;
+    3. the target's timezone is set to UTC. TEST-ONLY: the goldens were captured
+       with a UTC clock (the shots image links /etc/localtime to UTC), while a real
+       install keeps the timezone Calamares picked, which made the clock read 08:00
+       instead of 12:00. A real user must keep their own timezone, so this belongs
+       to verification only. It must happen before login because the session reads
+       the timezone when it starts.
 
-    Both are explicitly documented in their own source files as test-image-only
-    and were a deliberate choice BEFORE this install-verify harness existed -
-    promoting either to a real product file would be wrong (forcing every real
-    user's Dolphin window to a fixed 1000x600 box, or forcing software
-    rendering on real hardware that may have a perfectly good GPU, would both
-    be product regressions). Injecting them here, directly onto the installed
-    disk, after a real install and after the guest agent is reachable but
-    BEFORE the session that reads them ever starts, gets the comparison back on
-    equal footing without changing anything a real end user would ever see -
-    nothing here is written to, or shipped by, any package.
+    Why this exists (finding of 2026-10-17): the first full install-verify run failed
+    all 22 states because the shots image and the real install differed in exactly
+    this configuration (output scale, animations, timezone, determinism files), not
+    in the product. Earlier (2026-10-16) only kwinrulesrc and 10-vm-rendering.conf
+    were injected; the latter lives in environment.d (read by systemd itself before
+    any user unit) because plasma-workspace/env scripts never reached the session of
+    a crash-looping kwin_wayland - see docs/ISO_CONTRACT.md "Installed-system
+    verification". All of it happens after the guest agent is reachable and BEFORE
+    the SDDM login, because session configuration is read at login. Nothing here is
+    shipped by any package.
 
-    This file was moved from ``.config/plasma-workspace/env/10-vm-rendering.sh``
-    to ``.config/environment.d/10-vm-rendering.conf`` on 2026-10-16: a real
-    install-verify run found ``kwin_wayland`` crash-looping on a real hardware
-    EGL init attempt against ``/dev/dri/card0`` and never recovering, and NONE
-    of this session's custom environment variables - not this file's, not the
-    real product's own ``GTK_THEME``/``GTK_MODULES`` from
-    ``~/.config/plasma-workspace/env/*.sh`` either - reached
-    ``systemctl --user show-environment``, whether as a cause or a crash-cascade
-    symptom (not fully distinguished). systemd's own ``environment.d(5))``
-    mechanism is read directly by the systemd --user manager before any user
-    unit starts, independent of Plasma's own startup script and its timing, so
-    switching to it removes that whole class of failure regardless of which it
-    was. See docs/ISO_CONTRACT.md's "Installed-system verification" section for
-    the full incident.
-
-    (A THIRD candidate file, harness/vm/guest/skel/.config/environment.d/
-    20-gtk-appmenu.conf, is deliberately NOT in this list: the project owner
-    decided, 2026-10-16, that GTK_MODULES=appmenu-gtk-module is a real desired
-    product feature, not a test convenience - see
-    packages/kuura-shell/skel/.config/environment.d/20-gtk-appmenu.conf's own
-    header comment and packages/kuura-desktop/PKGBUILD's new
-    ``appmenu-gtk-module`` dependency. A real install already has this for
-    free; injecting it here too would be redundant, not wrong, but redundant
-    code is still worth avoiding.)
+    Ownership: GuestAgent.write_file creates parent directories as the desktop user
+    and chowns each file to ``agent.user`` (name and group); the agent is created
+    with this same ``guest_user`` (harness/install/boot.py), so the files belong to
+    the installed account. kwriteconfig6 runs as that user too.
 
     Args:
         vm: A phase-2 InstallVm with a connected guest agent (the caller's own
             responsibility - this function does not start or wait for one).
-        guest_user: The account whose home directory receives these files
-            (the same one run_install() created and log_into_sddm() will log
-            into next).
-        log: Progress callback, one line per file (same convention as this
+        guest_user: The account whose home directory receives the configuration
+            (the one run_install() created and log_into_sddm() logs into next).
+        log: Progress callback, one line per step (same convention as this
             module's other public functions).
+        skel_dir: Source tree for step 1 (tests only; defaults to the real one).
+        merge_entries: Entries for step 2; None loads the real fragments (tests only).
 
     Raises:
-        WizardError: vm.agent is None, or a source file is missing (both
-            configuration/environment problems, not expected in normal use).
+        WizardError: vm.agent is None, a source file cannot be read, a fragment is
+            malformed, a guest write or command fails, or a command exits non-zero.
+            Messages are generic (relative file and key names only, no host paths).
     """
-    if vm.agent is None:
+    agent = vm.agent
+    if agent is None:
         raise WizardError("inject_test_only_session_config requires a connected guest agent")
 
-    for source_rel, dest_rel in _TEST_ONLY_SESSION_FILES:
-        source = _PROJECT_ROOT / "harness" / "vm" / "guest" / "skel" / source_rel
+    # --- 1. wholesale test-only files ---------------------------------------------
+    for rel in _list_skel_files(skel_dir):
         try:
-            data = source.read_bytes()
+            data = (skel_dir / rel).read_bytes()
         except OSError as exc:
-            raise WizardError(f"could not read test-only session file {source_rel!r}: {exc}") from exc
-
-        dest = f"/home/{guest_user.name}/{dest_rel}"
+            raise WizardError(f"could not read test-only session file {rel!r}") from exc
+        dest = f"{guest_user.home}/{rel}"
         try:
-            vm.agent.write_file(dest, data)
-        except (TimeoutError, ConnectionError, RuntimeError, OSError) as exc:
-            raise WizardError(f"could not write {dest!r} to the guest: {exc}") from exc
-        log(f"injected test-only session file: {dest_rel}")
+            agent.write_file(dest, data)
+        except (TimeoutError, ConnectionError, RuntimeError, OSError, ValueError) as exc:
+            raise WizardError(f"could not write test-only session file {rel!r} to the guest") from exc
+        log(f"injected test-only session file: {rel}")
+
+    # --- 2. key-by-key merges into files the product ships -----------------------
+    if merge_entries is None:
+        try:
+            merge_entries = skelmerge.load_fragments()
+        except skelmerge.FragmentError as exc:
+            raise WizardError("the test-only skel-merge fragments are invalid") from exc
+    for entry in merge_entries:
+        label = f"{entry.file} [{']['.join(entry.groups)}] {entry.key}"
+        try:
+            argv = skelmerge.kwriteconfig_argv(entry, guest_user.home)
+            merged = agent.exec([RUNUSER, "-u", guest_user.name, "--", *argv])
+        except (TimeoutError, ConnectionError, RuntimeError, OSError, ValueError) as exc:
+            raise WizardError(f"could not apply test-only setting {label}") from exc
+        if merged.exit_code != 0:
+            raise WizardError(f"applying test-only setting {label} failed (exit {merged.exit_code})")
+    log(f"merged {len(merge_entries)} test-only setting(s)")
+
+    # --- 3. golden clock: UTC ------------------------------------------------------
+    try:
+        linked = agent.exec([_LN, "-sfn", "../usr/share/zoneinfo/UTC", "/etc/localtime"])
+    except (TimeoutError, ConnectionError, RuntimeError, OSError) as exc:
+        raise WizardError("could not set the target timezone to UTC") from exc
+    if linked.exit_code != 0:
+        raise WizardError(f"setting the target timezone to UTC failed (exit {linked.exit_code})")
+    log("set target timezone to UTC")
 
 
 def log_into_sddm(

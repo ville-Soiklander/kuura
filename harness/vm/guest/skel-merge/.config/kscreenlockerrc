@@ -1,0 +1,7 @@
+# Test-only keys MERGED (key by key, via kwriteconfig6) into the product's own
+# /etc/skel/.config/kscreenlockerrc; this file is never copied over it. WHY: the
+# product (packages/kuura-shell) ships this file too, and a wholesale copy would erase
+# its lock-screen wallpaper keys. See harness/skelmerge.py.
+[Daemon]
+Autolock=false
+LockOnResume=false

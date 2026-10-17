@@ -193,6 +193,25 @@ stage_context() {
     find "$TMP_DIR/ctx/guest" -type f -exec chmod 0644 {} +
     chmod 0755 -- "$TMP_DIR"/ctx/guest/make-sample-tree.sh \
         "$TMP_DIR"/ctx/guest/overlay/usr/local/bin/*
+
+    # Generate the skel-merge script (harness/skelmerge.py): the test-only keys of
+    # guest/skel-merge/ are written key by key into the product's own /etc/skel files
+    # by the Containerfile. WHY generated here and not in the Containerfile: the guest
+    # has no repo checkout and the contract code (parser, quoting) lives in Python on the
+    # build host. WHY it can fail the build: set -e plus the explicit `|| die`; a
+    # malformed fragment must never be dropped silently. Mode 0644 like every other
+    # data file in the context: the Containerfile runs it as `sh <file>`, so it needs no
+    # execute bit.
+    python3 -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from harness import skelmerge
+entries = skelmerge.load_fragments(Path(sys.argv[2]))
+sys.stdout.write(skelmerge.render_shell_script(entries, "/etc/skel"))
+' "$PROJECT_DIR" "$TMP_DIR/ctx/guest/skel-merge" > "$TMP_DIR/ctx/guest/skel-merge.sh" \
+        || die "could not generate guest/skel-merge.sh from guest/skel-merge/"
+    chmod 0644 -- "$TMP_DIR/ctx/guest/skel-merge.sh"
 }
 
 # Helper script, run inside a container from the pristine base image. FIXED text: every
