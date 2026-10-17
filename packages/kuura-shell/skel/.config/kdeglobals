@@ -1,5 +1,14 @@
-# Selects Kvantum as the active Qt widget style for new users. Installed to
-# /etc/skel/.config/kdeglobals by the kuura-shell package (docs/SHELL_CONTRACT.md).
+# Per-user KDE defaults for new users. Installed to /etc/skel/.config/kdeglobals by
+# the kuura-shell package (docs/SHELL_CONTRACT.md).
+#
+# widgetStyle=Breeze (CHANGED 2026-10-17, was kvantum): the generated Kvantum themes
+# ship only a .kvconfig and no SVG, so Kvantum drew every widget with its own dark
+# built-in default - light mode showed dark buttons, fields and a grey selection on
+# light windows, on both the screenshot harness and a real install. Breeze takes its
+# colours from the shipped colour scheme in both modes and follows live light/dark
+# switching. Kvantum stays installed; a token-generated Kvantum theme (SVG + per-mode
+# switching) is planned as its own phase, after which this key goes back to kvantum.
+# The history below describes the original kvantum choice.
 #
 # WHY this key and no others here: confirmed live (freshly booted guest image, KWin
 # 6.7.5-1 / kvantum 1.1.8-1, `kreadconfig6 --file kdeglobals --group KDE --key
@@ -44,5 +53,5 @@
 # KLookAndFeelManager silently keeps whatever Look-and-Feel package was already
 # active instead, not a crash).
 [KDE]
-widgetStyle=kvantum
+widgetStyle=Breeze
 LookAndFeelPackage=kuura

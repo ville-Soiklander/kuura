@@ -73,6 +73,17 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 #: file list is derived from the directory at call time so it cannot drift.
 _GUEST_SKEL_DIR = _PROJECT_ROOT / "harness" / "vm" / "guest" / "skel"
 
+#: The script the shots image build runs to create the fixed sample folder tree
+#: (Desktop, Documents, ... with fixed content and modification times).
+_SAMPLE_TREE_SCRIPT = _PROJECT_ROOT / "harness" / "vm" / "guest" / "make-sample-tree.sh"
+
+#: Where the script is staged in the guest while it runs (removed right after).
+_GUEST_SAMPLE_SCRIPT = "/tmp/make-sample-tree.sh"
+
+#: Absolute paths of bash and rm in the guest (the agent's exec does no PATH lookup).
+_BASH = "/usr/bin/bash"
+_RM = "/usr/bin/rm"
+
 #: Absolute path of ln in the guest (the agent's exec does no PATH lookup itself).
 _LN = "/usr/bin/ln"
 
@@ -630,6 +641,7 @@ def inject_test_only_session_config(
     log: Callable[[str], None] = lambda line: None,
     skel_dir: Path = _GUEST_SKEL_DIR,
     merge_entries: list[skelmerge.ConfigEntry] | None = None,
+    sample_tree_script: Path = _SAMPLE_TREE_SCRIPT,
 ) -> None:
     """
     Give a freshly installed target EXACTLY the test-only session configuration the
@@ -637,8 +649,15 @@ def inject_test_only_session_config(
     differences only.
 
     The shots image (harness/vm/Containerfile) is the real product plus three
-    test-only layers; this function applies the same three to the installed system:
+    test-only layers plus a fixed sample folder tree; this function applies the same
+    to the installed system:
 
+    0. the fixed sample folder tree (Desktop, Documents, ... and their files) is
+       created with the very script the image build runs. WHY: user-dirs.dirs (step 1)
+       points the places at those folders, but a real install creates none of them, so
+       the file manager showed "does not exist" errors and the desktop view did not
+       show the empty Desktop folder the goldens have. Runs first because the script
+       needs the home directory only, and as root (it chowns to the user);
     1. every regular file under ``harness/vm/guest/skel/`` is written to the same
        relative path in the desktop user's home (kwinrulesrc fixed window sizes,
        10-vm-rendering.conf software rendering, kwinoutputconfig.json output scale 2,
@@ -684,6 +703,7 @@ def inject_test_only_session_config(
             module's other public functions).
         skel_dir: Source tree for step 1 (tests only; defaults to the real one).
         merge_entries: Entries for step 2; None loads the real fragments (tests only).
+        sample_tree_script: Script for step 0 (tests only; defaults to the real one).
 
     Raises:
         WizardError: vm.agent is None, a source file cannot be read, a fragment is
@@ -693,6 +713,23 @@ def inject_test_only_session_config(
     agent = vm.agent
     if agent is None:
         raise WizardError("inject_test_only_session_config requires a connected guest agent")
+
+    # --- 0. fixed sample folder tree (same script as the image build) ---------------
+    try:
+        script = sample_tree_script.read_bytes()
+    except OSError as exc:
+        raise WizardError("could not read the sample folder tree script") from exc
+    try:
+        agent.write_file(_GUEST_SAMPLE_SCRIPT, script)
+        # The script validates /home/<user> itself; bash is run explicitly so the file
+        # needs no execute bit. The script is deleted again so nothing is left behind.
+        built = agent.exec([_BASH, _GUEST_SAMPLE_SCRIPT, guest_user.home, guest_user.name], timeout=60.0)
+        agent.exec([_RM, "-f", "--", _GUEST_SAMPLE_SCRIPT])
+    except (TimeoutError, ConnectionError, RuntimeError, OSError, ValueError) as exc:
+        raise WizardError("could not create the sample folder tree in the guest") from exc
+    if built.exit_code != 0:
+        raise WizardError(f"creating the sample folder tree failed (exit {built.exit_code})")
+    log("created the sample folder tree")
 
     # --- 1. wholesale test-only files ---------------------------------------------
     for rel in _list_skel_files(skel_dir):

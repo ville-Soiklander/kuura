@@ -218,7 +218,7 @@ COPY guest/skel/ /etc/skel/
 COPY guest/skel-merge.sh /tmp/skel-merge.sh
 RUN sh /tmp/skel-merge.sh \
     && rm -f /tmp/skel-merge.sh \
-    && grep -q '^widgetStyle=kvantum$' /etc/skel/.config/kdeglobals
+    && grep -q '^LookAndFeelPackage=kuura$' /etc/skel/.config/kdeglobals
 
 # The fixed desktop user: no password and the password locked (`passwd -l`), so there is
 # no way to log in with a password; SDDM logs it in without one. video/render/input give
