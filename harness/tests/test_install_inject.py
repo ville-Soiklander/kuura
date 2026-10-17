@@ -90,14 +90,15 @@ def test_merge_entries_run_as_the_desktop_user_with_exact_argv(skel: Path) -> No
     ]
 
 
-def test_timezone_is_linked_to_utc_last(skel: Path) -> None:
+def test_timezone_is_linked_to_utc_after_the_merges(skel: Path) -> None:
     """The UTC symlink command runs as root (no runuser) after the merges."""
     agent = FakeAgent()
     inject_test_only_session_config(make_vm(agent), USER, skel_dir=skel, merge_entries=ENTRIES)
-    assert agent.commands[-1] == ["/usr/bin/ln", "-sfn", "../usr/share/zoneinfo/UTC", "/etc/localtime"]
+    link = ["/usr/bin/ln", "-sfn", "../usr/share/zoneinfo/UTC", "/etc/localtime"]
+    assert link in agent.commands
     merges = [c for c in agent.commands if "kwriteconfig6" in c]
     assert len(merges) == len(ENTRIES)
-    assert agent.commands.index(merges[-1]) < len(agent.commands) - 1
+    assert agent.commands.index(merges[-1]) < agent.commands.index(link)
 
 
 def test_a_failing_kwriteconfig_raises_with_the_key_but_no_agent_output(skel: Path) -> None:
@@ -215,3 +216,133 @@ def test_missing_sample_tree_script_is_rejected(skel: Path, tmp_path: Path) -> N
         inject_test_only_session_config(
             make_vm(FakeAgent()), USER, skel_dir=skel, merge_entries=[], sample_tree_script=tmp_path / "nope.sh"
         )
+
+
+@pytest.fixture
+def overlay(tmp_path: Path) -> Path:
+    """A tiny system overlay: one helper program, one data file below /usr, one in /etc."""
+    root = tmp_path / "overlay"
+    (root / "usr/local/bin").mkdir(parents=True)
+    (root / "usr/local/share/harness").mkdir(parents=True)
+    (root / "etc/xdg").mkdir(parents=True)
+    (root / "usr/local/bin/tool").write_bytes(b"#!/bin/sh\n")
+    (root / "usr/local/share/harness/page.html").write_bytes(b"<html>")
+    (root / "etc/xdg/x.conf").write_bytes(b"conf")
+    return root
+
+
+def _install_commands(agent: FakeAgent) -> dict[str, list[str]]:
+    """Map destination path -> the root ``install`` command that creates it."""
+    return {c[-1]: c for c in agent.commands if c[0] == "/usr/bin/install"}
+
+
+def test_overlay_files_are_installed_root_owned_at_the_same_paths(skel: Path, overlay: Path) -> None:
+    """
+    Regression (install-verify browser-window): the shots image copies guest/overlay/
+    onto / (policies.json, harness-browser, the test page). The installed target must
+    get the same files at the same absolute paths, owned by root (system files), with
+    programs below usr/local/bin executable and everything else plain data.
+    """
+    agent = FakeAgent()
+    inject_test_only_session_config(make_vm(agent), USER, skel_dir=skel, merge_entries=[], overlay_dir=overlay)
+    installs = {d: a for d, a in _install_commands(agent).items() if not d.startswith("/etc/udev/")}
+    assert set(installs) == {"/usr/local/bin/tool", "/usr/local/share/harness/page.html", "/etc/xdg/x.conf"}
+    for dest, argv in installs.items():
+        mode = "0755" if dest == "/usr/local/bin/tool" else "0644"
+        assert argv[:8] == ["/usr/bin/install", "-D", "-m", mode, "-o", "root", "-g", "root"]
+        # The content is staged under the stage directory at the same relative path.
+        staged = argv[-2]
+        assert staged == f"{wizard._GUEST_STAGE_DIR}{dest}"
+        assert agent.writes[staged] == (overlay / dest.lstrip("/")).read_bytes()
+
+
+def test_overlay_staging_directory_is_removed_afterwards(skel: Path, overlay: Path) -> None:
+    """Nothing staged for the root install is left behind in the guest."""
+    agent = FakeAgent()
+    inject_test_only_session_config(make_vm(agent), USER, skel_dir=skel, merge_entries=[], overlay_dir=overlay)
+    cleanup = ["/usr/bin/rm", "-rf", "--", wizard._GUEST_STAGE_DIR]
+    assert cleanup in agent.commands
+    last_install = max(i for i, c in enumerate(agent.commands) if c[0] == "/usr/bin/install")
+    assert agent.commands.index(cleanup) > last_install
+
+
+def test_a_failing_overlay_install_raises_without_agent_output(skel: Path, overlay: Path) -> None:
+    """A non-zero install exit names the relative file only."""
+    agent = FakeAgent(fail_argv_containing="/etc/xdg/x.conf")
+    with pytest.raises(WizardError, match="etc/xdg/x.conf") as info:
+        inject_test_only_session_config(make_vm(agent), USER, skel_dir=skel, merge_entries=[], overlay_dir=overlay)
+    assert "secret detail" not in str(info.value)
+
+
+def test_missing_overlay_directory_is_rejected(skel: Path, tmp_path: Path) -> None:
+    """A moved overlay fails loudly instead of leaving the browser state without its files."""
+    with pytest.raises(WizardError, match="overlay"):
+        inject_test_only_session_config(
+            make_vm(FakeAgent()), USER, skel_dir=skel, merge_entries=[], overlay_dir=tmp_path / "nope"
+        )
+
+
+def test_the_real_overlay_provides_the_browser_files_at_their_image_paths() -> None:
+    """With no override the real guest/overlay tree is used (the same one the image build copies)."""
+    agent = FakeAgent()
+    inject_test_only_session_config(make_vm(agent), USER)
+    installs = _install_commands(agent)
+    for dest in (
+        "/usr/local/bin/harness-browser",
+        "/usr/local/bin/desktop-run",
+        "/usr/local/share/harness/browser-page.html",
+        "/usr/local/share/harness/firefox-profile/user.js",
+        "/usr/lib/firefox/distribution/policies.json",
+    ):
+        assert dest in installs
+
+
+def test_the_display_name_is_cleared_like_a_plain_useradd(skel: Path) -> None:
+    """
+    Regression (install-verify menubar-open): Calamares stores the full name in the
+    account's comment field and the launcher header shows it, while the shots image
+    creates the user with plain useradd (empty comment, header shows the login name).
+    """
+    agent = FakeAgent()
+    inject_test_only_session_config(make_vm(agent), USER, skel_dir=skel, merge_entries=[])
+    # The agent rejects empty arguments, so the field is emptied with sed on the passwd
+    # entry of exactly this user (fields 1-4 and 6-7 are kept).
+    expected = [
+        "/usr/bin/sed", "-i", "-E",
+        r"s/^(tester:[^:]*:[0-9]+:[0-9]+:)[^:]*(:.*)$/\1\2/",
+        "/etc/passwd",
+    ]
+    assert expected in agent.commands
+
+
+def test_a_failing_usermod_raises(skel: Path) -> None:
+    """A non-zero usermod exit is reported."""
+    agent = FakeAgent(fail_argv_containing="/usr/bin/sed")
+    with pytest.raises(WizardError, match="display name"):
+        inject_test_only_session_config(make_vm(agent), USER, skel_dir=skel, merge_entries=[])
+
+
+def test_installed_filesystem_partitions_are_hidden_from_udisks(skel: Path) -> None:
+    """
+    Regression (install-verify files-window): the installed root partition appeared as
+    a "Devices" entry in the file manager's places panel; the shots image has no disk
+    partition. A test-only udev rule sets UDISKS_IGNORE for filesystem partitions and
+    udev is told to re-evaluate the block devices (reload, trigger, settle in order).
+    """
+    agent = FakeAgent()
+    inject_test_only_session_config(make_vm(agent), USER, skel_dir=skel, merge_entries=[])
+    installs = _install_commands(agent)
+    rule_dest = "/etc/udev/rules.d/99-harness-hide-disks.rules"
+    assert rule_dest in installs
+    rule = agent.writes[installs[rule_dest][-2]].decode()
+    assert 'SUBSYSTEM=="block"' in rule and 'ENV{UDISKS_IGNORE}="1"' in rule
+    udev = [c for c in agent.commands if c[0] == "/usr/bin/udevadm"]
+    assert [c[1] for c in udev] == ["control", "trigger", "settle"]
+    assert agent.commands.index(installs[rule_dest]) < agent.commands.index(udev[0])
+
+
+def test_a_failing_udev_reload_raises(skel: Path) -> None:
+    """A non-zero udevadm exit is reported."""
+    agent = FakeAgent(fail_argv_containing="/usr/bin/udevadm")
+    with pytest.raises(WizardError, match="udev"):
+        inject_test_only_session_config(make_vm(agent), USER, skel_dir=skel, merge_entries=[])

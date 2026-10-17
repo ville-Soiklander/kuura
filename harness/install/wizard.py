@@ -77,6 +77,37 @@ _GUEST_SKEL_DIR = _PROJECT_ROOT / "harness" / "vm" / "guest" / "skel"
 #: (Desktop, Documents, ... with fixed content and modification times).
 _SAMPLE_TREE_SCRIPT = _PROJECT_ROOT / "harness" / "vm" / "guest" / "make-sample-tree.sh"
 
+#: System files the screenshot harness image copies onto / (harness/vm/Containerfile
+#: ``COPY guest/overlay/ /``): the browser wrapper, the test page, the browser profile
+#: template, the browser policies and the desktop-run helper. Injected at the same
+#: absolute paths so the installed target cannot drift from the image.
+_GUEST_OVERLAY_DIR = _PROJECT_ROOT / "harness" / "vm" / "guest" / "overlay"
+
+#: Directory (relative to the overlay root) whose files are programs and get mode 0755;
+#: every other overlay file is plain data (0644). Same rule harness/vm/build_rootfs.sh
+#: applies when it normalises the build context.
+_OVERLAY_PROGRAM_DIR = "usr/local/bin/"
+
+#: Guest directory where root-owned files are staged before ``install`` places them
+#: (GuestAgent.write_file can only create files owned by the desktop user, in
+#: directories that user may create; system paths need root). Removed afterwards.
+_GUEST_STAGE_DIR = "/tmp/harness-inject-stage"
+
+#: Test-only udev rule (step 6): udisks ignores filesystem partitions, so the file
+#: manager's places panel lists no "Devices" entry for the installed root partition.
+#: The shots image runs on a container root file system and has no such partition.
+_UDEV_RULE_DEST = "/etc/udev/rules.d/99-harness-hide-disks.rules"
+_UDEV_RULE = (
+    "# TEST ONLY (install-verify): keep disk partitions out of the file manager.\n"
+    'SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_FS_USAGE}=="filesystem", '
+    'ENV{UDISKS_IGNORE}="1"\n'
+).encode()
+
+#: Absolute paths of more guest programs (the agent's exec does no PATH lookup).
+_INSTALL = "/usr/bin/install"
+_SED = "/usr/bin/sed"
+_UDEVADM = "/usr/bin/udevadm"
+
 #: Where the script is staged in the guest while it runs (removed right after).
 _GUEST_SAMPLE_SCRIPT = "/tmp/make-sample-tree.sh"
 
@@ -609,12 +640,41 @@ def _sddm_password_field_visible(frame: Path) -> bool:
     return r > 240 and g > 240 and b > 240
 
 
-def _list_skel_files(skel_dir: Path) -> list[str]:
+def _install_root_file(agent: Any, data: bytes, dest: str, mode: int, label: str) -> None:
+    """
+    Place a root-owned file at an absolute guest path.
+
+    The content is first written below _GUEST_STAGE_DIR (the one place the agent's
+    file API can create as the desktop user), then ``install -D`` creates the missing
+    parent directories and sets owner root and the mode in one step.
+
+    Args:
+        agent: The connected guest agent.
+        data: File content.
+        dest: Absolute destination path in the guest.
+        mode: Permission bits, e.g. 0o644.
+        label: Short name used in error messages (never a host path).
+
+    Raises:
+        WizardError: the staging write or the install command failed.
+    """
+    staged = f"{_GUEST_STAGE_DIR}{dest}"
+    try:
+        agent.write_file(staged, data)
+        placed = agent.exec([_INSTALL, "-D", "-m", f"{mode:04o}", "-o", "root", "-g", "root", "--", staged, dest])
+    except (TimeoutError, ConnectionError, RuntimeError, OSError, ValueError) as exc:
+        raise WizardError(f"could not install test-only system file {label!r}") from exc
+    if placed.exit_code != 0:
+        raise WizardError(f"installing test-only system file {label!r} failed (exit {placed.exit_code})")
+
+
+def _list_skel_files(skel_dir: Path, what: str = "skeleton") -> list[str]:
     """
     List every regular file below ``skel_dir`` as a POSIX path relative to it.
 
     Args:
-        skel_dir: Root of the test-only skeleton tree.
+        skel_dir: Root of the test-only tree (skeleton or system overlay).
+        what: Word used in error messages for the kind of tree.
 
     Returns:
         Sorted relative paths (deterministic write order).
@@ -624,12 +684,12 @@ def _list_skel_files(skel_dir: Path) -> list[str]:
             file (a link could make the harness read arbitrary host files).
     """
     if skel_dir.is_symlink() or not skel_dir.is_dir():
-        raise WizardError("the test-only skeleton directory is missing")
+        raise WizardError(f"the test-only {what} directory is missing")
     found: list[str] = []
     for path in skel_dir.rglob("*"):
         rel = path.relative_to(skel_dir).as_posix()
         if path.is_symlink() or (not path.is_dir() and not path.is_file()):
-            raise WizardError(f"unsupported entry in the test-only skeleton: {rel!r}")
+            raise WizardError(f"unsupported entry in the test-only {what}: {rel!r}")
         if path.is_file():
             found.append(rel)
     return sorted(found)
@@ -642,6 +702,7 @@ def inject_test_only_session_config(
     skel_dir: Path = _GUEST_SKEL_DIR,
     merge_entries: list[skelmerge.ConfigEntry] | None = None,
     sample_tree_script: Path = _SAMPLE_TREE_SCRIPT,
+    overlay_dir: Path = _GUEST_OVERLAY_DIR,
 ) -> None:
     """
     Give a freshly installed target EXACTLY the test-only session configuration the
@@ -676,7 +737,20 @@ def inject_test_only_session_config(
        install keeps the timezone Calamares picked, which made the clock read 08:00
        instead of 12:00. A real user must keep their own timezone, so this belongs
        to verification only. It must happen before login because the session reads
-       the timezone when it starts.
+       the timezone when it starts;
+    4. every file of ``harness/vm/guest/overlay/`` (the tree the image copies onto /)
+       is installed root-owned at the same absolute path: harness-browser, the test
+       page, the profile template, desktop-run and the browser policies.json. WHY:
+       the product's own policies.json is lighter than the image's, so the installed
+       browser showed an account button the golden lacks and shifted the URL bar.
+       The overlay file replaces the product's copy, exactly as it does in the image;
+    5. the account's display name (the comment field Calamares fills from the Users
+       page) is cleared. WHY: the image creates the user with plain useradd, so the
+       launcher header shows the login name; the installed one showed the full name;
+    6. a udev rule makes udisks ignore filesystem partitions, and udev re-evaluates
+       the block devices. WHY: the installed root partition showed up as a "Devices"
+       entry in the file manager's places panel; the image has no such partition.
+       Steps 4-6 run after the timezone link, all as root, all before the login.
 
     Why this exists (finding of 2026-10-17): the first full install-verify run failed
     all 22 states because the shots image and the real install differed in exactly
@@ -704,6 +778,7 @@ def inject_test_only_session_config(
         skel_dir: Source tree for step 1 (tests only; defaults to the real one).
         merge_entries: Entries for step 2; None loads the real fragments (tests only).
         sample_tree_script: Script for step 0 (tests only; defaults to the real one).
+        overlay_dir: Source tree for step 4 (tests only; defaults to the real one).
 
     Raises:
         WizardError: vm.agent is None, a source file cannot be read, a fragment is
@@ -769,6 +844,59 @@ def inject_test_only_session_config(
     if linked.exit_code != 0:
         raise WizardError(f"setting the target timezone to UTC failed (exit {linked.exit_code})")
     log("set target timezone to UTC")
+
+    # --- 4. system overlay (same files, same paths as the image) --------------------
+    overlay_files = _list_skel_files(overlay_dir, what="overlay")
+    try:
+        for rel in overlay_files:
+            try:
+                data = (overlay_dir / rel).read_bytes()
+            except OSError as exc:
+                raise WizardError(f"could not read test-only overlay file {rel!r}") from exc
+            mode = 0o755 if rel.startswith(_OVERLAY_PROGRAM_DIR) else 0o644
+            _install_root_file(agent, data, "/" + rel, mode, rel)
+            log(f"installed test-only system file: /{rel}")
+
+        # (file part of step 6) the udev rule, installed with the same root helper.
+        _install_root_file(agent, _UDEV_RULE, _UDEV_RULE_DEST, 0o644, "udev rule")
+    finally:
+        # Best effort: a leftover stage directory is harmless in a throw-away VM.
+        try:
+            agent.exec([_RM, "-rf", "--", _GUEST_STAGE_DIR])
+        except (TimeoutError, ConnectionError, RuntimeError, OSError):
+            pass
+
+    # --- 5. display name: empty comment field, like plain useradd ------------------
+    # WHY sed and not usermod/chfn: the guest agent rejects empty-string arguments, and
+    # an empty comment is exactly what is wanted. The pattern is anchored to this one
+    # user and keeps every other field, so only field 5 (the comment) changes.
+    if not _USERNAME_PATTERN.match(guest_user.name):
+        raise WizardError("the account name is not a plain login name")
+    try:
+        renamed = agent.exec(
+            [_SED, "-i", "-E", rf"s/^({guest_user.name}:[^:]*:[0-9]+:[0-9]+:)[^:]*(:.*)$/\1\2/", "/etc/passwd"]
+        )
+    except (TimeoutError, ConnectionError, RuntimeError, OSError) as exc:
+        raise WizardError("could not clear the account display name") from exc
+    if renamed.exit_code != 0:
+        raise WizardError(f"clearing the account display name failed (exit {renamed.exit_code})")
+    log("cleared the account display name")
+
+    # --- 6. make udev re-evaluate the block devices with the new rule --------------
+    # Reload the rules, replay a change event for every block device (udisks reads
+    # UDISKS_IGNORE from the device's udev properties), wait until it is processed.
+    for argv in (
+        [_UDEVADM, "control", "--reload"],
+        [_UDEVADM, "trigger", "--action=change", "--subsystem-match=block"],
+        [_UDEVADM, "settle", "--timeout=30"],
+    ):
+        try:
+            done = agent.exec(argv, timeout=60.0)
+        except (TimeoutError, ConnectionError, RuntimeError, OSError) as exc:
+            raise WizardError("could not reload the udev rules in the guest") from exc
+        if done.exit_code != 0:
+            raise WizardError(f"reloading the udev rules failed (exit {done.exit_code})")
+    log("hid disk partitions from the file manager")
 
 
 def log_into_sddm(
