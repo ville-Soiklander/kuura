@@ -90,18 +90,20 @@
 # depends=('kvantum') already follows for its own theme engine.
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-installer-config"
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Calamares installer configuration: branding, settings.conf and module defaults generated/vendored from this project's own design tokens and the real upstream Calamares defaults"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
 # Generated configuration and this package's own vendored-with-one-line-diff
 # copies of Calamares' real default configs are GPL-3.0-or-later (see LICENSE
-# and docs/LICENSES/README.md), matching every other first-party package in
+# and LICENSES/README.md), matching every other first-party package in
 # this monorepo. The vendored upstream text itself is CC0-1.0 per its own
 # SPDX header (see calamares-defaults/*), which is compatible with being
 # redistributed under this project's own GPL-3.0-or-later alongside it.
 license=('GPL-3.0-or-later')
-depends=('calamares')
+# 'python' is also a RUNTIME dependency: helpers/strip_live_repo.py runs in the
+# target chroot during install (shellprocess.conf).
+depends=('calamares' 'python')
 # python: build() runs design/generate.py, design/generate_icons.py and
 # design/generate_wallpapers.py through their own `python -m` CLIs.
 # python-pillow: generate_wallpapers.py needs Pillow (see its own module
@@ -186,8 +188,16 @@ package() {
     # OWN config (not vendored - see this PKGBUILD's own header and each
     # file's own header for why), implementing docs/ISO_CONTRACT.md's
     # "Live-only cleanup" section. ----
-    install -Dm644 "$defaults/modules/shellprocess.conf" \
-        "$pkgdir/etc/calamares/modules/shellprocess.conf"
+    # shellprocess.conf carries @NAME@ placeholders (the live-repository
+    # cleanup), substituted with the same plain sed as settings.conf above.
+    tmp="$(mktemp)"
+    sed "s/@NAME@/${DISTRO_NAME}/g" "$defaults/modules/shellprocess.conf" > "$tmp"
+    install -Dm644 "$tmp" "$pkgdir/etc/calamares/modules/shellprocess.conf"
+    rm -f "$tmp"
+    # Helper that shellprocess.conf calls to strip the live repository section
+    # from the target's pacman.conf; lives under /usr/lib so it needs no PATH.
+    install -Dm755 "$srcdir/../helpers/strip_live_repo.py" \
+        "$pkgdir/usr/lib/${DISTRO_NAME}-installer-config/strip-live-repo"
     install -Dm644 "$defaults/modules/packages.conf" \
         "$pkgdir/etc/calamares/modules/packages.conf"
 

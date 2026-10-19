@@ -30,7 +30,7 @@ menu shows real menus for both a Qt application (Dolphin) and a GTK application.
 
 A new package, installed by `kuura-desktop` (added to its `depends`). Ships no upstream
 source; like `kuura-desktop` it is built from this monorepo. License GPL-3.0-or-later
-(`docs/LICENSES/README.md`: "themes, configuration, scripts").
+(`LICENSES/README.md`: "themes, configuration, scripts").
 
 - `PKGBUILD`: `build()` runs `python3 -m design.generate` against this repository's own
   `design/` tree (copied into the build container next to `packages/`, see

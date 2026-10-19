@@ -1,0 +1,31 @@
+# $distro $version
+$unofficial_banner
+Release date: $date (UTC)
+
+## Image
+
+| Item | Value |
+|---|---|
+| File | `$iso_name` |
+| Size | $iso_size_human ($iso_size_bytes bytes) |
+| SHA-256 | `$iso_sha256` |
+| Git commit | `$git_commit` |
+| Arch Linux Archive snapshot | $archive_date |
+| Plasma (plasma-desktop) | $plasma_version |
+| KWin | $kwin_version |
+
+## Verifying the download
+
+```
+gpg --verify SHA256SUMS.sig SHA256SUMS
+sha256sum --check SHA256SUMS
+```
+
+`SHA256SUMS.sig` is a detached signature made with the release key
+`$signing_key`. Verify the checksum file first, then the files it lists.
+
+## Included documents
+
+- `LICENSE` - the project license.
+- `TRADEMARKS.md` - the trademark policy.
+- `ASSETS.md` - third-party assets shipped in the image.

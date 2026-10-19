@@ -92,7 +92,7 @@ pkgdesc="Chromium integration: managed policy disabling metrics reporting and th
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
 # This package ships none of Chromium's own code, only its own PKGBUILD and
-# policy file (see LICENSE and docs/LICENSES/README.md).
+# policy file (see LICENSE and LICENSES/README.md).
 license=('GPL-3.0-or-later')
 # chromium: the browser this package configures - see the OPEN DECISION note
 # above for why this is not automatically pulled into every real install

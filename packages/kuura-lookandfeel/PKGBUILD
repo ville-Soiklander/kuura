@@ -47,7 +47,7 @@ pkgdesc="Logout/shutdown confirmation dialog, packaged as a Plasma Look-and-Feel
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
 # Themes, configuration and scripts of the project are GPL-3.0-or-later (see
-# LICENSE and docs/LICENSES/README.md).
+# LICENSE and LICENSES/README.md).
 license=('GPL-3.0-or-later')
 # plasma-workspace: ships ksmserver-logout-greeter, the real binary that
 # loads this package's own contents/logout/Logout.qml at the real,

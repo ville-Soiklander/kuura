@@ -54,12 +54,12 @@ pointing at a `file://` path where the ISO carries a full copy of
 public key). This entry exists so the live session and Calamares can install
 `$(DISTRO_NAME)-desktop` and `$(DISTRO_NAME)-installer-config` from local
 media, with no network dependency and no change to the archive-pin
-discipline above. **Scope boundary, deliberately out for Vaihe 7:** whether
-an *installed* kuura system keeps this repository entry afterwards (pointing
-at media that is no longer present) or has it stripped post-install is an
-open question for Vaihe 8 (kuura does not yet have any real ongoing package
-server to point it at instead) — note it in `packages.x86_64`'s own comments,
-do not silently decide it either way by accident.
+discipline above. **Decided for Vaihe 8 (2026-10-19): the installed system does not keep this
+repository.** Calamares' `shellprocess` step removes the `[$DISTRO_NAME]` section
+from the target's `/etc/pacman.conf`, deletes `/srv/repo` and the repository's
+cached sync database; see "Local repository on the installed system" below.
+Reason: kuura has no package server yet, and an entry pointing at absent
+media makes every `pacman -Syu` on the installed system fail.
 
 ## Directory layout
 
@@ -321,11 +321,9 @@ Calamares' own `machineid` exec module); `/usr/share/mime/**`,
 ldconfig,swcatalog}/**`, `/usr/lib/modules/*/modules.*`,
 `/usr/lib/udev/hwdb.bin` (all standard regenerable Arch-system caches,
 present and unowned on every Arch install, not archiso-specific);
-`/srv/repo/**` (the ISO's own staged local repository — this section's own
-earlier text already explicitly defers the question of whether an
-installed system keeps it to Vaihe 8; removing it here would be silently
-deciding that question by accident, which is exactly what was to be
-avoided); `/etc/systemd/resolved.conf.d/archiso.conf` (content is a
+`/srv/repo/**` (the ISO's own staged local repository — NOT kept: removed
+by the Vaihe 8 decision, see "Local repository on the installed system");
+`/etc/systemd/resolved.conf.d/archiso.conf` (content is a
 generically-fine mDNS preference despite its filename, not live-specific in
 effect); `/etc/modprobe.d/broadcom-wl.conf` (a standard upstream-releng
 driver preference, not kuura- or live-specific, equally valid installed);
@@ -629,6 +627,38 @@ desktop`/`kuura-shell` and every sanity-kept package (`gpm mc vim brltty`)
 intact, confirmed twice independently. No further action needed here — the
 removal list and its real, measured effect are both locked.
 
+### Local repository on the installed system (decided 2026-10-19, Vaihe 8)
+
+The installed system keeps **neither** the `[$DISTRO_NAME]` section in
+`/etc/pacman.conf` **nor** `/srv/repo`. Reason: kuura has no package server
+yet, so the entry could only point at the live medium, which is absent after
+installation; every `pacman -Syu` would then fail. When a real package server
+exists, the installed system gets a normal `Server =` entry instead (a future
+decision, not a reversal of this one).
+
+Implemented in `modules/shellprocess.conf` (after `unpackfs`, before `packages`
+in `settings.conf.in`, so no later pacman call in the target sees the dead
+repository):
+
+1. `/usr/lib/$DISTRO_NAME-installer-config/strip-live-repo $DISTRO_NAME /etc/pacman.conf`
+   (`packages/kuura-installer-config/helpers/strip_live_repo.py`): removes
+   exactly that section (header plus its option lines); other sections, the
+   comment lines that introduce the next section and `[options]` are untouched
+   (`[options]` is refused). Idempotent; atomic write. A failure fails the
+   install on purpose.
+2. `rm -rf /srv/repo`.
+3. `rm -f /var/lib/pacman/sync/$DISTRO_NAME.db{,.sig}` (stale cached database).
+
+The `packages` module's `remove` operations need no sync database, so they are
+unaffected by the section being gone.
+
+**Signing key: nothing to remove.** The repository key is trusted only in the
+*build container's* keyring (`iso/run_mkarchiso.sh`); it is never imported into
+the live image's keyring (`/etc/pacman.d/gnupg` is a tmpfs created at live boot)
+and therefore never reaches the target. Had it been present, removing it would
+still be the right call: with no repository referencing it, a trusted key that
+nothing needs is only attack surface.
+
 ## Installed-system verification
 
 Decided, 2026-10-13 (project owner's explicit choice, `AskUserQuestion`):
@@ -831,13 +861,13 @@ reported honestly below rather than folded into "fixed":
      bug).
    - Separately confirmed via the diff images: in the simplest state with no
      window open (`desktop-empty`), the differing pixels are cleanly isolated
-     to the top panel strip and the bottom dock (the wallpaper itself matches
+     to the top panel strip and the bottom shelf (the wallpaper itself matches
      pixel-for-pixel) — plausibly explained by `InstallVm` using a plain
      `-device VGA,...` display adapter (required — see `boot.py`'s own
      docstring on why `virtio-vga` segfaults QEMU on a cold BIOS/`-cdrom`
      boot on this project's hosts) where `harness/shots/vm.py` uses
      `virtio-vga`, which could plausibly render the project's own
-     translucent/frosted panel and dock material differently. This is a
+     translucent/frosted panel and shelf material differently. This is a
      plausible, source-confirmed-as-different-device hypothesis, not a
      pixel-isolated proof of causation.
 
@@ -852,6 +882,17 @@ was **not** touched, read, or re-approved by any part of this work — any
 
 **The two groups of failures above were decided, 2026-10-15 (project owner's
 explicit choice, `AskUserQuestion`, two rounds):**
+
+> **Superseded 2026-10-19 (Vaihe 8, project owner's decision):** the released
+> product ships no test tooling. `libnotify`, `mousepad`, `gtk4-demos` and the
+> `harness-support` package were removed from the metapackage, and the package
+> directory was deleted. install-verify now supplies them to the installed TEST
+> target itself: the overlay files (including the stricter browser policy) through
+> `harness/install/wizard.py` `inject_test_only_session_config` step 4, and the
+> three programs through `harness/install/testpackages.py` (downloaded on the
+> host from the pinned archive snapshot, signatures verified there, then
+> installed in the guest). Item 1 and item 2 below are kept as the record of the
+> earlier decision.
 
 1. The 8 "did not settle" states (`notification`, `app-menu-gtk`,
    `gtk4-widget-factory`, `browser-window`, each mode) are fixed by shipping
@@ -959,7 +1000,7 @@ surfaced a third, real, unrelated blocker and, once past it, root-caused the
      whole Plasma session - also test-image only. Orchestrator's own
      screenshot comparison on the simplest state (`desktop-empty`, no window
      open) found the differing pixels cleanly isolated to the top panel and
-     bottom dock, which render fully OPAQUE on the real install instead of
+     bottom shelf, which render fully OPAQUE on the real install instead of
      this project's own translucent "frost" material (correct on the
      golden) - consistent with KWin's blur/translucency effect depending on
      this explicit software-GL request, not available by default on
@@ -995,7 +1036,7 @@ two rounds):**
    (the env export) are promoted to real, permanently-shipped product files**
    instead of also being injected - project owner's choice: working global
    menu for classic GTK3 `GtkMenuBar` apps is a real, desired feature of this
-   project's own macOS-inspired desktop (the whole point of the panel's
+   project's own desktop (the whole point of the panel's
    Global Menu widget), not a test-only convenience that merely happened to
    live on the test image, unlike the other two. `packages/kuura-desktop/
    PKGBUILD` gained the `appmenu-gtk-module` dependency;
@@ -1146,7 +1187,7 @@ back to the project owner:** the very first successful install-verify run,
 long before this file (or any rendering override) existed, already reached
 a working desktop via `kwin_wayland`'s own default hardware/software
 fallback on this exact `-device VGA`/bochs-drm QEMU configuration - the
-*only* defect that run had was cosmetic (opaque panel/dock instead of this
+*only* defect that run had was cosmetic (opaque panel/shelf instead of this
 project's translucent "frost" material), never a crash. That is direct
 evidence kwin's own default fallback already handles "no GPU here"
 correctly on this VM without any override at all. The thing that is new
@@ -1174,13 +1215,13 @@ just the delegated agent's claim): a fresh `harness.install.run` reached
 all 22 states with real captured frames and `error: None` - no crash, no
 timeout, `wait_for_desktop()` succeeded. The orchestrator independently
 viewed the actual `light/desktop-empty.png` output, its golden, and the
-diff image directly: the panel and dock genuinely render as soft,
+diff image directly: the panel and shelf genuinely render as soft,
 translucent "frost" material in both - the original defect this override
 existed to fix is also confirmed gone, not just "no crash."
 
 **Remaining 0/22 pixel-diff pass rate is a separate, pre-existing issue,
 not a new regression from this incident.** Visual inspection of the diff
-image found the large red panel/dock region is driven by two concrete,
+image found the large red panel/shelf region is driven by two concrete,
 measurable default-state differences between a real Calamares install and
 the pre-baked screenshot-harness test image: the golden's system tray has
 one more icon (a screen/share-type indicator absent on the real install)

@@ -77,7 +77,7 @@ pkgdesc="Icon set, wallpapers and UI sounds generated from design/tokens.json"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
 # Code, configuration and this package's own generated assets are
-# GPL-3.0-or-later (see LICENSE and docs/LICENSES/README.md). The assets
+# GPL-3.0-or-later (see LICENSE and LICENSES/README.md). The assets
 # themselves are this project's own procedural output (see docs/ASSETS.md),
 # not a third-party work with its own separate license.
 license=('GPL-3.0-or-later')

@@ -21,7 +21,7 @@ except the display device - see below):
   segfault, in the VGA BIOS ROM on a cold ``-cdrom`` boot). After the switch, 18 of the
   22 states matched goldens captured with ``virtio-vga``; the other 4 differed only
   inside application text/list views, from an unrelated theme change. Resolution,
-  scale, colours and the panel/dock blur were unchanged.
+  scale, colours and the panel/shelf blur were unchanged.
 * ``usb-tablet`` (absolute pointer) so cursor positions are well defined.
 * ``-nic none``: the guest has no network.
 * ``-snapshot``: all writes go to a throw-away overlay, so the image is never modified

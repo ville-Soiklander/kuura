@@ -23,6 +23,19 @@ _SNIFF_BYTES = 8192
 # Hash list next to this script: one 64 character hex digest per line, '#' starts a comment.
 HASH_FILE = Path(__file__).with_name("forbidden_terms.sha256")
 
+# Per-file exemptions: repo-relative POSIX path -> digests allowed in that file only.
+# WHY: the project needs exactly one legal notice (trademark disclaimer) that must
+# name a company the project is NOT affiliated with. The owner decided to allow
+# that single name in that single file and nowhere else; every other forbidden
+# term stays forbidden even inside the exempted file. The digest is stored (not
+# the plain word) because this checker scans itself.
+EXEMPTIONS: dict[str, frozenset[str]] = {
+    # Digest of the normalised company name that is named in the disclaimer.
+    "TRADEMARKS.md": frozenset(
+        {"3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b"}
+    ),
+}
+
 
 def load_hashes(path: Path) -> set[str]:
     """
@@ -50,18 +63,24 @@ def load_hashes(path: Path) -> set[str]:
     return hashes
 
 
-def line_hits(line: str, hashes: set[str]) -> bool:
+def line_hits(line: str, hashes: set[str], exempt: frozenset[str] = frozenset()) -> bool:
     """
     Check one line of text against the hash set.
 
     Args:
         line: A single line of text.
         hashes: Set of forbidden digests.
+        exempt: Digests that are allowed in this context and therefore never
+            count as a hit, even if they are in `hashes`.
 
     Returns:
         True if any single word, or any two adjacent words joined without a
-        separator, lowercased and hashed with SHA-256, is in `hashes`.
+        separator, lowercased and hashed with SHA-256, is in `hashes` and not
+        in `exempt`.
     """
+    # Remove exempted digests up front so every other digest is still checked.
+    active = hashes - exempt
+
     # Extract all words (runs of ASCII letters and digits).
     words = _WORD.findall(line)
 
@@ -70,7 +89,7 @@ def line_hits(line: str, hashes: set[str]) -> bool:
         # Lowercase and hash the word.
         lowered = word.lower()
         digest = hashlib.sha256(lowered.encode("utf-8")).hexdigest()
-        if digest in hashes:
+        if digest in active:
             return True
 
     # Check each pair of adjacent words joined without separator.
@@ -78,19 +97,22 @@ def line_hits(line: str, hashes: set[str]) -> bool:
         # Concatenate two adjacent words and lowercase.
         pair = (words[i] + words[i + 1]).lower()
         digest = hashlib.sha256(pair.encode("utf-8")).hexdigest()
-        if digest in hashes:
+        if digest in active:
             return True
 
     return False
 
 
-def scan_text(text: str, hashes: set[str]) -> list[int]:
+def scan_text(
+    text: str, hashes: set[str], exempt: frozenset[str] = frozenset()
+) -> list[int]:
     """
     Find the lines of a text that contain a forbidden name.
 
     Args:
         text: Whole file content.
         hashes: Set of forbidden digests.
+        exempt: Digests allowed in this text; passed on to line_hits.
 
     Returns:
         Ascending 1-based line numbers for which line_hits is True.
@@ -98,9 +120,36 @@ def scan_text(text: str, hashes: set[str]) -> list[int]:
     hits = []
     # Use enumerate with start=1 to get 1-based line numbers.
     for line_num, line in enumerate(text.splitlines(), start=1):
-        if line_hits(line, hashes):
+        if line_hits(line, hashes, exempt):
             hits.append(line_num)
     return hits
+
+
+def exempt_for(path: Path, repo_root: Path) -> frozenset[str]:
+    """
+    Look up the digests that are allowed in a given file.
+
+    Args:
+        path: File being scanned (absolute or relative to the working directory).
+        repo_root: Root directory of the repository.
+
+    Returns:
+        The exempted digests from EXEMPTIONS, or an empty set if the file is
+        outside the repository, is a symlink, or has no exemption.
+    """
+    try:
+        # WHY: a symlink could point an exempted name at arbitrary content, so
+        # symlinks never receive an exemption.
+        if path.is_symlink():
+            return frozenset()
+        resolved = path.resolve()
+        root = repo_root.resolve()
+        # relative_to raises ValueError when the file is outside the repository.
+        rel = resolved.relative_to(root).as_posix()
+    except (ValueError, OSError):
+        return frozenset()
+    # Exact, case-sensitive match: only the listed path is exempt.
+    return EXEMPTIONS.get(rel, frozenset())
 
 
 def is_text_file(path: Path) -> bool:
@@ -196,6 +245,9 @@ def main(argv: list[str] | None = None) -> int:
         print("forbidden_terms.sha256 not found", file=sys.stderr)
         return 2
 
+    # The repository root is the parent of the tools directory holding this script.
+    repo_root = HASH_FILE.parent.parent
+
     # Determine which files to scan.
     if argv:
         # Scan the given file paths.
@@ -203,7 +255,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         # Scan all tracked files of the repository.
         try:
-            repo_root = HASH_FILE.parent
+            # WHY repo root and not tools/: `git -C tools ls-files` lists only the
+            # files under tools/, so the rest of the repository was never scanned.
             files = tracked_files(repo_root)
         except RuntimeError as e:
             print(str(e), file=sys.stderr)
@@ -225,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         # Scan the text for forbidden terms.
-        line_numbers = scan_text(text, hashes)
+        line_numbers = scan_text(text, hashes, exempt_for(file_path, repo_root))
         for line_num in line_numbers:
             print(f"{file_path}:{line_num}: forbidden term")
             hit_count += 1

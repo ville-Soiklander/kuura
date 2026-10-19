@@ -106,6 +106,12 @@ from harness.install.boot import (
     InstallVmConfig,
     InstallVmEnvironmentError,
 )
+from harness.install.testpackages import (
+    ARCHIVE_DATE_PATTERN,
+    ArchiveFetcher,
+    TestPackageError,
+    install_test_only_packages,
+)
 from harness.install.wizard import (
     WizardCredentials,
     WizardError,
@@ -161,6 +167,11 @@ class InstalledVerifyOptions:
         credentials: The test account the install creates (DEFAULT_CREDENTIALS
             unless a caller overrides it).
         states_file: Same meaning as harness.shots.capture.CaptureOptions.states_file.
+        archive_date: Arch Archive snapshot (``YYYY/MM/DD``, ARCH_ARCHIVE_DATE) the
+            ISO was built from. The test-only programs (notify-send, mousepad,
+            gtk4-widget-factory) are fetched from exactly that snapshot and installed
+            into the target, because the shipped product does not contain them.
+        package_cache: Host directory caching the downloaded package files.
     """
 
     out_dir: Path
@@ -173,6 +184,8 @@ class InstalledVerifyOptions:
     disk_dir: Path
     credentials: WizardCredentials = DEFAULT_CREDENTIALS
     states_file: Path = PROJECT_ROOT / "harness" / "states.toml"
+    archive_date: str = ""
+    package_cache: Path = PROJECT_ROOT / ".build" / "install-verify-pkgs"
 
 
 def find_single_iso(iso_dir: Path) -> Path:
@@ -393,6 +406,14 @@ def run_installed_verify(
             if not firmware_path.is_file():
                 raise EnvironmentProblem(f"OVMF firmware file {firmware_path.name!r} is missing; install the ovmf package")
 
+    # Resolve the test-only programs now (needs the host's pacman and network): a
+    # problem here should stop the run before the first slow install, not after it.
+    try:
+        package_fetcher = ArchiveFetcher(options.archive_date, options.package_cache)
+        package_fetcher.resolve()
+    except TestPackageError as exc:
+        raise EnvironmentProblem(str(exc)) from None
+
     options.disk_dir.mkdir(parents=True, exist_ok=True)
     options.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -458,6 +479,9 @@ def run_installed_verify(
                 # for this same boot.
                 log("staging test-only session configuration")
                 inject_test_only_session_config(vm, guest_user, log=log)
+                # The programs some states run are not in the product: bring them
+                # from the same archive snapshot as the ISO (offline in the guest).
+                install_test_only_packages(vm.agent, package_fetcher, log=log)
 
                 # Calamares' own users.conf has doAutologin: false (deliberate security
                 # default) - the installed system always reaches an SDDM greeter, never an
@@ -486,6 +510,7 @@ def run_installed_verify(
             InstallVmEnvironmentError,
             InstallVmBootError,
             WizardError,
+            TestPackageError,
             StepError,
             ValueError,
             OSError,
@@ -585,6 +610,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--name", default=os.environ.get("DISTRO_NAME", "theme"))
     parser.add_argument("--generated", type=Path, default=PROJECT_ROOT / ".build" / "generated")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--archive-date",
+        default=os.environ.get("ARCH_ARCHIVE_DATE", ""),
+        help="Arch Archive snapshot YYYY/MM/DD the ISO was built from (default: $ARCH_ARCHIVE_DATE)",
+    )
     args = parser.parse_args(argv)
     try:
         if not NAME_PATTERN.match(args.name):
@@ -598,7 +628,11 @@ def main(argv: list[str] | None = None) -> int:
             generated_dir=args.generated,
             iso_dir=args.iso_dir,
             disk_dir=args.disk_dir,
+            archive_date=args.archive_date,
         )
+        # Checked after the other arguments so a bad firmware/state name is reported first.
+        if not ARCHIVE_DATE_PATTERN.match(args.archive_date):
+            raise ValueError("set ARCH_ARCHIVE_DATE (or --archive-date) to the snapshot date YYYY/MM/DD")
         code, manifest = run_installed_verify(options)
     except (ValueError, EnvironmentProblem) as exc:
         print(f"error: {exc}", file=sys.stderr)

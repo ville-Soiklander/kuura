@@ -19,11 +19,12 @@ CONTAINER_ENGINE  := $(strip $(CONTAINER_ENGINE))
 ARCH_ARCHIVE_DATE := $(strip $(ARCH_ARCHIVE_DATE))
 REPO_DIR          := $(strip $(REPO_DIR))
 GPG_KEY_ID        := $(strip $(GPG_KEY_ID))
+RELEASE_GPG_KEY   := $(strip $(RELEASE_GPG_KEY))
 
 # Recipes and the container refer to the configuration as $$VAR (never as an
 # expanded Make value), so exporting is what carries it into the shell and,
 # through `-e VAR`, into the build container.
-export DISTRO_NAME CONTAINER_ENGINE ARCH_ARCHIVE_DATE REPO_DIR GPG_KEY_ID
+export DISTRO_NAME CONTAINER_ENGINE ARCH_ARCHIVE_DATE REPO_DIR GPG_KEY_ID RELEASE_GPG_KEY
 
 IMAGE := localhost/$(DISTRO_NAME)-build
 
@@ -40,7 +41,7 @@ SHOTS_DIFF_DIR := .build/shots-diff
 GOLDENS_DIR    := harness/goldens
 
 .PHONY: image repo verify-install check test clean require-config \
-	vm-image shots shots-determinism goldens-review goldens-accept iso
+	vm-image shots shots-determinism goldens-review goldens-accept iso installed-verify
 
 # Build the build image (packages frozen to ARCH_ARCHIVE_DATE, tools, user, scripts).
 image: require-config
@@ -113,6 +114,36 @@ goldens-accept:
 # so the live session and Calamares can install from local media with no network.
 iso: repo
 	bash iso/build_iso.sh
+
+# Boot the built ISO under QEMU/KVM for every firmware path (BIOS + UEFI by
+# default), drive a real Calamares install via synthetic UI input (no guest
+# agent exists yet on the live medium), reboot the installed disk standalone
+# and run the existing shots/compare diff-pass against it
+# (docs/ISO_CONTRACT.md "Installed-system verification"). Deliberately NOT
+# named verify-install (above): that unrelated target checks that `make repo`'s
+# own package repository installs cleanly into a plain chroot, nothing to do
+# with the ISO or Calamares.
+installed-verify: iso
+	python3 -m design.generate --out-dir $(GENERATED_DIR)
+	python3 -m harness.install.run --out .build/install-verify
+
+# Build the live ISO directly on an Arch Linux build host with mkarchiso (release/
+# build_iso_host.sh): no container. MUST run as root on a host with archiso installed
+# (e.g. `sudo make iso-host`, or from a root shell in the build distro). It consumes the
+# repository `make repo` produced and does not run it. Details: docs/BUILD_CONTRACT.md,
+# "Release".
+.PHONY: iso-host release
+iso-host:
+	bash release/build_iso_host.sh
+
+# Assemble .build/release/<distro>-<version>/ from the single ISO in .build/iso/ (it
+# never rebuilds the ISO): ISO, SHA256SUMS, detached SHA256SUMS.sig, RELEASE_NOTES.md,
+# LICENSE, TRADEMARKS.md, ASSETS.md. Needs RELEASE_GPG_KEY (set it in .env or pass
+# `make release RELEASE_GPG_KEY=<id>`; a value in .env.example is empty and wins over
+# the process environment), VERSION, a clean tree and a v<VERSION> tag on HEAD;
+# RELEASE_ALLOW_DIRTY=1 permits an unofficial dry run. Nothing is published.
+release:
+	python3 -m release.release
 
 # Static checks that do not need a container.
 check:

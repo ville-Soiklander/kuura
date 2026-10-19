@@ -48,7 +48,7 @@ pkgdesc="SDDM login screen theme generated from design/tokens.json"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
 # Themes, configuration and scripts of the project are GPL-3.0-or-later (see LICENSE
-# and docs/LICENSES/README.md).
+# and LICENSES/README.md).
 license=('GPL-3.0-or-later')
 # sddm: the display manager this package themes and configures.
 # inter-font: design/generators/sddm_theme.py bakes tokens.type.family_ui

@@ -1,0 +1,51 @@
+# Licenses
+
+Licenses by component. The license texts live in this directory, named by their
+SPDX identifiers; `LICENSE` in the repository root is a copy of
+`GPL-3.0-or-later.txt`.
+
+| File | License | Text source |
+|---|---|---|
+| `GPL-3.0-or-later.txt` | GNU GPL version 3 | https://www.gnu.org/licenses/gpl-3.0.txt |
+| `GPL-2.0-or-later.txt` | GNU GPL version 2 | https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt |
+| `CC-BY-SA-4.0.txt` | Creative Commons Attribution-ShareAlike 4.0 International | https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt |
+
+The GPL texts are the official FSF texts; the Creative Commons text is the
+official plain-text legal code. The `-or-later` file names follow the SPDX
+convention: the text is the same for the "only" and "or-later" variants, the
+"or later" grant is made by the notice in the work, not by the text.
+
+## What each component is licensed under today
+
+| Component | Where | License as declared today |
+|---|---|---|
+| Themes, configuration, scripts, generators, build files | `design/`, `build/`, `tools/`, `harness/`, `iso/`, `docs/`, `tests/` | GPL-3.0-or-later |
+| All first-party packages (`kuura-desktop`, `kuura-shell`, `kuura-sddm`, `kuura-lookandfeel`, `kuura-firefox`, `kuura-chromium`, `kuura-installer-config`) | `packages/*/PKGBUILD` | GPL-3.0-or-later |
+| Frost compositor effect (C++ KWin plugin) | `packages/kuura-frost` | GPL-3.0-or-later (PKGBUILD `license`) |
+| Own icon set, wallpapers and UI sounds (procedural output of the generators) | `design/`, packaged by `packages/kuura-assets` | GPL-3.0-or-later (PKGBUILD `license`) |
+| Vendored Calamares configuration defaults | `packages/kuura-installer-config/calamares-defaults/` | CC0-1.0 headers upstream; shipped inside a GPL-3.0-or-later package |
+
+## Intended licenses not yet applied
+
+The project plan intends two different licenses than the packages currently
+declare. They are listed here so the gap is visible, not silently assumed to be
+closed; the texts are included so that either decision can be applied without
+a further review step:
+
+- **Frost** is intended to be GPL-2.0-or-later, for compatibility with the
+  compositor it loads into. The package currently declares GPL-3.0-or-later
+  and the sources carry no per-file license header. Changing the
+  declaration is a decision for the project owner.
+- **Own icons, wallpapers and sounds** are intended to be CC-BY-SA-4.0. The
+  `kuura-assets` package currently declares GPL-3.0-or-later for them.
+
+Neither text is used by any file in the repository yet.
+
+## Notes
+
+- Software installed from the distribution's package repositories (Plasma,
+  fonts and so on) keeps its own license; it is neither copied into nor
+  relicensed by this repository.
+- Third-party assets are listed with source and license in `docs/ASSETS.md`.
+- Adding a new license text to this directory needs the same review as adding
+  a new dependency.

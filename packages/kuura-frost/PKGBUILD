@@ -29,7 +29,7 @@ pkgdesc="Glass 'material' KWin compositor effect (background blur reuse, edge re
 arch=('x86_64')
 url='https://github.com/ville-Soiklander/kuura'
 # Code, configuration and scripts of the project are GPL-3.0-or-later (see
-# LICENSE and docs/LICENSES/README.md).
+# LICENSE and LICENSES/README.md).
 license=('GPL-3.0-or-later')
 # kwin: the compositor this plugin loads into at runtime (metadata.json is
 # read by KWin's own effect loader; the compiled .so is installed under its

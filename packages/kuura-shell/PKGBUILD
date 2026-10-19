@@ -23,12 +23,12 @@
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-shell"
 pkgver=0.1.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Desktop shell theming: panel layout, KWin tuning, shortcuts, Kvantum, GTK3 and GTK4 theme (plus the GTK_THEME session env fix that makes GTK4 actually load it)"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
 # Themes, configuration and scripts of the project are GPL-3.0-or-later (see LICENSE
-# and docs/LICENSES/README.md).
+# and LICENSES/README.md).
 license=('GPL-3.0-or-later')
 # kvantum: the theme engine this package configures (docs/SHELL_CONTRACT.md's own
 # "Dark mode" section below explains why widgetStyle=kvantum plus a per-theme

@@ -131,7 +131,7 @@ namespace Kuura
  * guest boot (a throwaway diagnostic tint shader, 50% red blend, bound the
  * same way the real shader will bind; see loadShaders()'s own comment) via
  * harness/spike/boot_capture.sh, and the tint DID visibly apply to real
- * redirected windows (panel, dock, KRunner popup) once the base
+ * redirected windows (panel, shelf, KRunner popup) once the base
  * KWin::Effect::isActive()-guarded rendering to compare against was even in
  * the picture -- but that comparison itself required an extra discovery
  * first: BlurEffect::enabledByDefault() (blur.cpp) unconditionally returns
@@ -142,7 +142,7 @@ namespace Kuura
  * boot). Force-loading it (`.../Effects.loadEffect blur`, bypassing that
  * default-off heuristic) DOES make Frost redirect real windows and apply the
  * tint -- but every surface tested this way (KRunner's popup, the panel, the
- * dock, against three different backdrops: the stock gradient wallpaper,
+ * shelf, against three different backdrops: the stock gradient wallpaper,
  * Dolphin's file view, Firefox's new-tab page) rendered with no visually
  * detectable backdrop translucency at all, tinted or not -- consistent with,
  * and now mechanistically explaining, this project's own earlier, separate

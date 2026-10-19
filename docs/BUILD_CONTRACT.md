@@ -117,3 +117,58 @@ $(REPO_DIR)/x86_64/
   <package>.pkg.tar.zst       (+ .sig)
 $(REPO_DIR)/$(DISTRO_NAME).pub   public key
 ```
+
+## Release
+
+Vaihe 8 produces a signed release **locally**; nothing is uploaded or published by any
+target. Two steps, deliberately separate so a release never rebuilds the image it
+describes:
+
+### `make iso-host` - ISO on an Arch build host
+
+Runs `release/build_iso_host.sh`: `mkarchiso` directly on an Arch Linux host, **as
+root** (e.g. the `kuura-arch-build` WSL distribution). It consumes the repository from
+`make repo` and does the following, failing loudly (`set -euo pipefail`) at the first
+problem:
+
+1. Stage `iso/profile/` and a copy of `$(REPO_DIR)` in `$HOST_BUILD_DIR/ctx` (default
+   `$HOME/$(DISTRO_NAME)_iso_build`, must be on a native Linux filesystem; it is only
+   deleted if it carries the script's marker file). `@DISTRO_NAME@` is substituted and
+   the build-time `[$(DISTRO_NAME)]` `Server` line is pointed at the staged copy.
+2. Import the repository key into the host keyring and `--lsign-key` it.
+3. Delete stale `/var/cache/pacman/pkg/$(DISTRO_NAME)-*.pkg.tar.zst*`. This is
+   mandatory: pacman's cache is keyed by file name and has served stale packages when a
+   rebuilt package kept its name and version.
+4. Fresh `work/` and `out/`, then `mkarchiso -v` with `SOURCE_DATE_EPOCH` (derived from
+   `ARCH_ARCHIVE_DATE` unless set).
+5. Replace the ISO in `.build/iso/` (older ISOs are removed) and compare the SHA-256 of
+   the copy with mkarchiso's output.
+
+The staging steps duplicate `stage_context()` in `iso/build_iso.sh` (that script runs
+its `main` when sourced, so the logic cannot be shared without editing it): keep the
+two in sync when the profile layout changes.
+
+### `make release` - signed release directory
+
+Runs `python3 -m release.release` (`release/release.py`, unit-tested in
+`tests/test_release.py`) and writes `.build/release/$(DISTRO_NAME)-<version>/`:
+
+| File | Content |
+|---|---|
+| `<name>.iso` | The single ISO from `.build/iso/` (zero or several: error) |
+| `SHA256SUMS` | `sha256sum` format, every file below except the signature |
+| `SHA256SUMS.sig` | Detached GPG signature by `RELEASE_GPG_KEY`, verified after creation |
+| `RELEASE_NOTES.md` | Version, date, ISO size and SHA-256, `ARCH_ARCHIVE_DATE`, Plasma and KWin versions from `docs/VERSIONS.md`, git commit |
+| `LICENSE`, `TRADEMARKS.md`, `ASSETS.md` | Copies; a missing source file is an error |
+
+Rules:
+
+- The version comes from the `VERSION` file only (`MAJOR.MINOR.PATCH`).
+- `RELEASE_GPG_KEY` (key id, fingerprint or e-mail of a key already in the GPG keyring;
+  empty in `.env.example`, set it in `.env`) is required. The target never creates or
+  falls back to another key.
+- The git tree must have no changes to tracked files and `HEAD` must be tagged
+  `v<version>`. `RELEASE_ALLOW_DIRTY=1` overrides both for a dry run and marks the notes
+  "UNOFFICIAL BUILD".
+- The directory is built as `<name>.partial` and renamed on success, so a failed run
+  leaves no half-finished release; running again replaces the previous result.

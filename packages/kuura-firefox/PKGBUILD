@@ -31,7 +31,7 @@ pkgdesc="Firefox integration: preinstalled default profile, userChrome.css/userC
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
 # Themes, configuration and scripts of the project are GPL-3.0-or-later (see LICENSE
-# and docs/LICENSES/README.md). This package ships none of Firefox's own code.
+# and LICENSES/README.md). This package ships none of Firefox's own code.
 license=('GPL-3.0-or-later')
 # firefox: the browser this package themes and preconfigures - see the OPEN
 # DECISION note above for why this is not automatically pulled into every real
