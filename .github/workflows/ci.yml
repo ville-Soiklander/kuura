@@ -14,6 +14,12 @@
 #     goldens (docs/HARNESS_CONTRACT.md). Skips itself, rather than failing the build,
 #     on a runner without nested virtualization (see the KVM check step) - GitHub has
 #     not documented KVM support on standard hosted Linux runners as a guarantee.
+#   - install-harness: Boot the real ISO, drive a real Calamares install (both
+#     firmware paths) and run the same screenshot diff-pass against the installed
+#     system (docs/ISO_CONTRACT.md "Installed-system verification"). Copied from
+#     screenshot-harness's own "skip without a usable /dev/kvm" pattern - in
+#     practice always skips itself on today's GitHub-hosted runners too, same as
+#     that job; it exists for a self-hosted or future KVM-capable hosted runner.
 
 # Third-party actions are pinned to full commit SHAs (a tag can be moved, a SHA
 # cannot); the release is named in the trailing comment. To update one, look up the
@@ -102,4 +108,40 @@ jobs:
         with:
           name: shots-diff
           path: .build/shots-diff/
+          retention-days: 14
+
+  install-harness:
+    name: Install harness (real ISO boot + Calamares)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
+      - name: Check for nested virtualization
+        id: kvm
+        run: |
+          if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::/dev/kvm is not usable on this runner; skipping the install harness (docs/HARNESS_CONTRACT.md, Limits)."
+          fi
+      - name: Install QEMU
+        if: steps.kvm.outputs.available == 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils ovmf
+      - name: Install Python dependencies
+        if: steps.kvm.outputs.available == 'true'
+        run: pip install -r requirements.txt
+      - name: Build the repository and the ISO, then boot-install and verify it
+        if: steps.kvm.outputs.available == 'true'
+        env:
+          CONTAINER_ENGINE: podman
+        run: make installed-verify
+      - name: Upload the install-verify report
+        if: always() && steps.kvm.outputs.available == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: install-verify
+          path: .build/install-verify/
           retention-days: 14

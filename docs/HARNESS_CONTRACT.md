@@ -160,3 +160,15 @@ runner, a shared machine), that is a known open risk, not a settle-logic bug to 
 retry past — capture the failing run's artifacts (`.build/shots-diff/`, the `.FAILED.png`
 diagnostic) before re-running, so the next investigation has real data instead of a
 second unreproduced anecdote.
+
+## Reuse by the install harness (Vaihe 7)
+
+`harness/install/` (`docs/ISO_CONTRACT.md`, "Installed-system verification") reuses
+this document's own `Runner` + `states.toml` + comparison machinery unchanged to run
+the same states/goldens against a real Calamares-installed system, reached by a
+different, real-firmware boot path (`harness/install/boot.py`'s `InstallVm`, not this
+document's own `Vm`) and a guest agent now also enabled on that installed target for
+that reason (`packages/kuura-installer-config/calamares-defaults/modules/
+services-systemd.conf`). Everything above about the comparison itself still applies
+unchanged; see `docs/ISO_CONTRACT.md` for what is different about getting the guest
+booted in the first place.
