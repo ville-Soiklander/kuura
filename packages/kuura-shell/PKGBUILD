@@ -23,7 +23,7 @@
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-shell"
 pkgver=0.1.0
-pkgrel=3
+pkgrel=4
 pkgdesc="Desktop shell theming: panel layout, KWin tuning, shortcuts, Kvantum, GTK3 and GTK4 theme (plus the GTK_THEME session env fix that makes GTK4 actually load it)"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'

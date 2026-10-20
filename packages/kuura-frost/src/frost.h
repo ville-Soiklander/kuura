@@ -5,10 +5,13 @@
 // older kwineffects/ path an older KWin version used.
 #include <effect/offscreeneffect.h>
 
+#include <QHash>
 #include <QMap>
 #include <QMetaObject>
+#include <QRectF>
 
 #include <memory>
+#include <optional>
 
 namespace KDecoration3
 {
@@ -101,59 +104,27 @@ namespace Kuura
  * creation and if it changes later -- there is no separate, Frost-specific
  * hint to invent.
  *
- * RESOLVED (was "STILL OPEN" -- KWin's effect chain is ordered
- * (`Effect::requestedEffectChainPosition()`, 0-100, low = earlier) and
- * effects call the next one in the chain from within their own paint method,
- * confirmed from effect.h's own documentation; what that documentation does
- * NOT say is whether Blur's rendering ends up already present in the texture
- * OffscreenEffect::redirect() captures for the same window). Answer, traced
- * through KWin's own source (src/effect/effecthandler.cpp,
- * src/effect/offscreeneffect.cpp, src/plugins/blur/blur.cpp at the pinned
- * tag) rather than assumed -- see requestedEffectChainPosition()'s own
- * docstring below for the full mechanical trace: Frost's redirected texture
- * DOES already contain Blur's blurred background, PROVIDED (a) Frost's chain
- * position is LOWER than Blur's confirmed 20 (the OPPOSITE of this
- * docstring's original "after Blur's" framing -- EffectsHandler::drawWindow()
- * dispatches through a single shared iterator that a re-entrant capture call
- * can only advance, never rewind), AND (b) the window's WindowForceBlurRole
- * data is set true before capture (OffscreenData::maybeRender() always paints
- * with PAINT_WINDOW_TRANSFORMED, which BlurEffect::shouldBlur() otherwise
- * treats as a reason to refuse). Both conditions are implemented:
- * requestedEffectChainPosition() below returns 10, and
- * updateWindowState() sets WindowForceBlurRole. This was independently
- * corroborated by KWin's own developer comment on the adjacent
- * CrossFadeEffect (offscreeneffect.cpp), which deliberately CLEARS the same
- * role around ITS OWN capture specifically because leaving it alone WOULD
- * include Blur's/Contrast's rendering by default.
+ * HOW FROST COMBINES WITH BLUR (corrected 2026-10-20 after the first
+ * hardware-GL run; the earlier "Frost's redirected texture already contains
+ * Blur's blurred background" claim was WRONG -- see
+ * requestedEffectChainPosition() for the source trace and the live evidence):
+ * Blur draws the frosted backdrop directly onto the real render target in its
+ * own drawWindow(), then forwards the call down the chain. Frost runs AFTER
+ * Blur (chain position 30 > 20), so by the time Frost's inherited
+ * OffscreenEffect::drawWindow() composites the window's captured texture, the
+ * frosted backdrop is already on screen underneath it. Frost's material is
+ * therefore applied to the WINDOW'S OWN translucent pixels (highlight, noise,
+ * a sub-pixel edge refraction of the window's own content), composited over
+ * Blur's untouched result -- Frost never reproduces, captures or replaces the
+ * blur itself.
  *
- * NOT fully confirmed by a live screenshot, and why -- reported rather than
- * silently assumed proven: this mechanical answer was checked against a real
- * guest boot (a throwaway diagnostic tint shader, 50% red blend, bound the
- * same way the real shader will bind; see loadShaders()'s own comment) via
- * harness/spike/boot_capture.sh, and the tint DID visibly apply to real
- * redirected windows (panel, shelf, KRunner popup) once the base
- * KWin::Effect::isActive()-guarded rendering to compare against was even in
- * the picture -- but that comparison itself required an extra discovery
- * first: BlurEffect::enabledByDefault() (blur.cpp) unconditionally returns
- * false when `context->isSoftwareRenderer()` is true, so Blur is NEVER loaded
- * by default in this project's screenshot harness (software/llvmpipe
- * rendering throughout, no host GPU -- confirmed live: `qdbus6 org.kde.KWin
- * /Effects org.kde.kwin.Effects.loadedEffects` never lists "blur" on a stock
- * boot). Force-loading it (`.../Effects.loadEffect blur`, bypassing that
- * default-off heuristic) DOES make Frost redirect real windows and apply the
- * tint -- but every surface tested this way (KRunner's popup, the panel, the
- * shelf, against three different backdrops: the stock gradient wallpaper,
- * Dolphin's file view, Firefox's new-tab page) rendered with no visually
- * detectable backdrop translucency at all, tinted or not -- consistent with,
- * and now mechanistically explaining, this project's own earlier, separate
- * finding (docs/SHELL_CONTRACT.md's krunnerrc section) that KRunner exposes
- * no real, working "material"/opacity lever in this build. The screenshot
- * evidence therefore confirms the REDIRECT+SHADER pipeline itself works
- * end-to-end on real windows, but cannot visually settle blurred-vs-sharp for
- * any surface available in this specific harness. Revisit with a real (or
- * GPU-passthrough) render target if/when one becomes available; until then,
- * the source-level trace above is the basis for this class's design, not a
- * screenshot.
+ * KNOWN LIMITATION of this design (reported, not hidden): the edge
+ * refraction displaces the window's own translucent content, not the blurred
+ * backdrop behind it, because the backdrop is never in Frost's texture. At
+ * the token's ~0.42 px maximum displacement the visual difference is
+ * negligible; refracting the backdrop itself would need Frost to read the
+ * render target (as Blur's own blitFromRenderTarget() does) in a different
+ * kind of effect, which is a larger redesign.
  */
 class Frost : public KWin::OffscreenEffect
 {
@@ -177,46 +148,39 @@ public:
      * Places Frost in KWin's effect chain (0-100, low = early; see effect.h's
      * own documentation, confirmed live at /usr/include/kwin/effect/effect.h).
      *
-     * RESOLVED (was the class docstring's "STILL OPEN" question): Frost MUST
-     * run BEFORE Blur (confirmed requestedEffectChainPosition() == 20, KWin's
-     * own src/plugins/blur/blur.h at the pinned tag), i.e. return a value below
-     * 20 here -- the OPPOSITE of the naive "run after Blur" framing this
-     * question started with. Why, traced through KWin's own source (not
-     * assumed):
+     * Frost MUST run AFTER Blur (Blur's requestedEffectChainPosition() == 20,
+     * src/plugins/blur/blur.h at the pinned tag v6.7.5), so this returns 30.
+     * An earlier version returned 10 on the theory that Frost's capture would
+     * "pick up" Blur's output; that was disproved live on the first
+     * hardware-GL run (virgl): with Frost loaded the backdrop behind Kickoff
+     * was SHARP, identical to running without Blur except for Frost's own
+     * noise. The mechanism, traced through KWin's own source at the pinned tag:
      *
-     *   - EffectsHandler::drawWindow() (src/effect/effecthandler.cpp) dispatches
-     *     through a SINGLE SHARED member iterator (m_currentDrawWindowIterator)
-     *     over the chain-position-ordered active-effects list, using an
-     *     increment-call-decrement pattern: `(*it++)->drawWindow(...); --it;`.
-     *     While a given effect's own drawWindow() call is executing, the shared
-     *     iterator has ALREADY been advanced past that effect's position.
-     *   - OffscreenEffect::drawWindow() (src/effect/offscreeneffect.cpp), which
-     *     Frost inherits unmodified, calls OffscreenData::maybeRender() for a
-     *     redirected window, which makes its OWN re-entrant call to
-     *     effects->drawWindow(FBO, ...) to capture the window into Frost's FBO.
-     *     This re-entrant call reuses the SAME shared iterator, so it can only
-     *     ever reach effects positioned AFTER Frost's own position -- it can
-     *     never reach an effect the dispatch already passed.
-     *   - Blur (KWin::Effect, not OffscreenEffect) draws its blur directly onto
-     *     whichever RenderTarget it is given (BlurEffect::drawWindow(): `blur(
-     *     renderTarget, ...); effects->drawWindow(renderTarget, ...);` --
-     *     confirmed in blur.cpp) -- it does not care whether that target is the
-     *     real screen or Frost's FBO.
-     *   - Therefore Blur's rendering only ends up inside Frost's captured FBO
-     *     texture if Blur's turn in the SAME dispatch has not been consumed yet
-     *     when Frost's own maybeRender() re-enters it, i.e. Frost's position
-     *     must be lower (earlier) than Blur's 20.
-     *   - Separately (see updateWindowState()'s own comment): maybeRender()
-     *     always passes the PAINT_WINDOW_TRANSFORMED mask, which makes
-     *     BlurEffect::shouldBlur() refuse to blur unless the window's
-     *     WindowForceBlurRole data is true -- Frost sets this explicitly, since
-     *     nothing else does for an ordinary panel/popup.
+     *   - EffectsHandler::drawWindow() (src/effect/effecthandler.cpp) walks the
+     *     chain with a single shared iterator: `(*it++)->drawWindow(...); --it;`.
+     *     Each effect reaches the next one only by calling
+     *     effects->drawWindow() itself.
+     *   - OffscreenEffect::drawWindow() (src/effect/offscreeneffect.cpp) NEVER
+     *     forwards the call to the real render target for a redirected window.
+     *     It calls OffscreenData::maybeRender(), which -- only when the window
+     *     is damaged -- clears Frost's FBO to transparent and re-enters
+     *     effects->drawWindow() with the FBO as the target, then paint()s the
+     *     texture onto the real target.
+     *   - So with Frost BEFORE Blur, Blur's drawWindow() was never called for
+     *     the screen at all; it only ran inside the capture, where
+     *     BlurEffect::blur() (src/plugins/blur/blur.cpp) blits "the backdrop"
+     *     from the render target it is given -- Frost's freshly cleared,
+     *     transparent FBO -- and blurs nothing. Frost then composited the
+     *     window over the unblurred screen. Setting WindowForceBlurRole (which
+     *     the earlier version also did) only made Blur run on that empty FBO.
+     *   - With Frost AFTER Blur, BlurEffect::drawWindow() runs on the real
+     *     target first (`blur(renderTarget, ...)` then `effects->drawWindow()`),
+     *     the shared iterator then reaches Frost, and Frost's capture re-enters
+     *     the chain only for the effects after it -- Blur is not involved in
+     *     the capture at all, which is exactly what is wanted.
      *
-     * Both mechanisms were CONFIRMED against a live guest-image screenshot
-     * (a throwaway diagnostic tint shader, see apply()'s own comment and the
-     * V4 investigation notes handed back with this change) before this value
-     * was chosen, not assumed from source reading alone -- this project's own
-     * "verify live" rule.
+     * 30 also stays below slidingpopups (40), so the popup slide animation's
+     * own drawWindow() step still runs inside Frost's capture, unchanged.
      */
     int requestedEffectChainPosition() const override;
 
@@ -280,13 +244,20 @@ protected:
      * ONLY red-tint fragment source -- this is the locked mathematical
      * specification the working brief asks for, "a reference implementation,
      * not an instruction to just make a glass effect"). Given per-pixel:
-     *   - `texcoord0`, the normalized [0,1] UV already sampling Frost's
-     *     captured texture (confirmed real, already used by the diagnostic
-     *     shader) -- which, per requestedEffectChainPosition()'s resolved
-     *     trace, already contains Blur's blurred background for any window
-     *     this class redirects. Frost's shader therefore does NOT reimplement
-     *     dual-Kawase blur; it only adds the three effects below on top of
-     *     what it samples.
+     *   - `texcoord0`, the normalized [0,1] UV sampling Frost's captured
+     *     texture -- the window's OWN pixels only (premultiplied, translucent).
+     *     Blur's frosted backdrop is already on the render target underneath
+     *     (see requestedEffectChainPosition()), so Frost's shader does NOT
+     *     reimplement dual-Kawase blur; it only adds the effects below to the
+     *     window it composites over that backdrop. texcoord0's v axis is GL's
+     *     bottom-up one (GLTexture::matrix() flips it for an FBO texture), so
+     *     the shader converts to a top-left-origin pixel position first.
+     *   - `glassRect`, the bounding box of the window's blur region in the
+     *     texture's device pixels (top-left origin). Every edge below is an
+     *     edge of THIS rect, not of the texture: the texture spans the
+     *     window's expanded geometry, which includes the shadow, so texture
+     *     edges are the outer edges of the shadow, not of the glass. Pixels
+     *     outside the rect pass through unchanged.
      *   - `windowSize`, the window's real pixel dimensions -- NOT YET a
      *     uniform; apply() or loadShaders() must add one, sourced from
      *     EffectWindow's real size accessor (verify the exact method name
@@ -407,6 +378,16 @@ protected:
      * generateShaderFromFile()/generateCustomShader() family), adapted to this
      * class's single-pass architecture rather than copied verbatim.
      *
+     * PER-WINDOW UNIFORM (`glassRect`): set every frame in apply() by
+     * binding Frost's program around the setUniform() call
+     * (ShaderManager::pushShader()/popShader(), blur.cpp's own idiom).
+     * Uniform values are program state, so the value survives the unbind and
+     * is what OffscreenData::paint() draws this window with right after
+     * apply() returns. This corrects the paragraph below, which assumed a
+     * uniform could not be set from apply() at all; that remains the reason
+     * the five CONSTANT material values are still uploaded once, but only
+     * because they never change, not because apply() cannot set uniforms.
+     *
      * FLAGGED, NOT SILENTLY WORKED AROUND -- why the material.* uniforms
      * (refractionStrength/edge_falloff/edgeHighlightWidth/Opacity/noiseAmount)
      * are set ONCE in loadShaders(), not every frame in apply() as this
@@ -465,6 +446,23 @@ private:
      * @param window the window whose blur-region state to (re-)check
      */
     void updateWindowState(KWin::EffectWindow *window);
+
+    /**
+     * Computes the bounding box of the area KWin's Blur effect frosts for one
+     * window, by the same rules as BlurEffect::updateBlurRegion() and
+     * BlurEffect::blurRegion() (blur.cpp at the pinned tag): X11
+     * _KDE_NET_WM_BLUR_BEHIND_REGION, Wayland SurfaceInterface::blurRegion(),
+     * an internal window's "kwin_blur" property, and the decoration's blur
+     * region. An empty content region means the whole contents rect.
+     *
+     * @param window the window to inspect
+     * @return the bounding rect in frame-local LOGICAL coordinates, or
+     *     std::nullopt if the window requests no blur at all (and therefore
+     *     gets no glass material). A present but empty rect is possible (a
+     *     blur region fully outside the contents rect); the shader then
+     *     passes the window through unchanged.
+     */
+    std::optional<QRectF> glassBoundingRect(KWin::EffectWindow *window) const;
 
     /**
      * Connected to EffectsHandler::windowAdded (constructor) to call
@@ -553,6 +551,12 @@ private:
     // disconnect it -- mirrors BlurEffect's own windowBlurChangedConnections
     // member (blur.h at the pinned tag).
     QMap<KWin::EffectWindow *, QMetaObject::Connection> m_surfaceBlurChangedConnections;
+
+    // Cached glassBoundingRect() per redirected window (frame-local logical
+    // coordinates). Refreshed by updateWindowState() on every blur-region
+    // change signal and read by apply() every frame -- cached because the X11
+    // source is a server round-trip that must not run per frame.
+    QHash<KWin::EffectWindow *, QRectF> m_glassRects;
 
 #if KWIN_BUILD_X11
     // The shared _KDE_NET_WM_BLUR_BEHIND_REGION atom (see slotPropertyNotify()'s

@@ -382,3 +382,14 @@ class TestQmlSingletonRender:
         # Verify the easing curve array includes the numbers exactly as written
         # (including -0.2 and 1.2, plus the appended 1, 1)
         assert "[0.3, -0.2, 0.5, 1.2, 1, 1]" in result
+
+
+def test_stroke_tokens_are_emitted_as_real_properties():
+    """stroke.hairline/focus become typed `real` QML properties with the token values."""
+    from design.validate import load_tokens
+
+    tokens = load_tokens(Path(__file__).parent.parent / "tokens.json")
+    for mode in ("light", "dark"):
+        text = render(tokens, mode=mode, name="Theme")
+        assert "    readonly property real strokeFocus: 2.0\n" in text
+        assert "    readonly property real strokeHairline: 1.0\n" in text

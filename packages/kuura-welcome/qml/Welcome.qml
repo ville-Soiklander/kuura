@@ -126,7 +126,7 @@ Window {
         background: Rectangle {
             radius: root.tk.radiusButton
             color: choice.checked ? root.tk.colorAccent : root.tk.colorSurfaceAlt
-            border.width: choice.visualFocus ? root.tk.materialEdgeHighlightWidth * 2 : 0
+            border.width: choice.visualFocus ? root.tk.strokeFocus : 0
             border.color: root.tk.colorLink
             Behavior on color { ColorAnimation { duration: root.tk.motionDurationFast } }
         }
@@ -149,7 +149,7 @@ Window {
         background: Rectangle {
             radius: root.tk.radiusButton
             color: action.highlighted ? root.tk.colorAccent : root.tk.colorSurfaceAlt
-            border.width: action.visualFocus ? root.tk.materialEdgeHighlightWidth * 2 : 0
+            border.width: action.visualFocus ? root.tk.strokeFocus : 0
             border.color: root.tk.colorLink
         }
         contentItem: Text {
@@ -253,7 +253,7 @@ Window {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: root.tk.materialEdgeHighlightWidth
+            implicitHeight: root.tk.strokeHairline
             color: root.tk.colorSeparator
         }
 
@@ -271,7 +271,7 @@ Window {
                     y: showBox.topPadding + (showBox.availableHeight - height) / 2
                     radius: root.tk.radiusField / 2
                     color: showBox.checked ? root.tk.colorAccent : root.tk.colorSurface
-                    border.width: root.tk.materialEdgeHighlightWidth
+                    border.width: root.tk.strokeHairline
                     border.color: showBox.visualFocus ? root.tk.colorLink : root.tk.colorSeparator
                     Text {
                         anchors.centerIn: parent

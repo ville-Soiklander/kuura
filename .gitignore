@@ -26,6 +26,7 @@ scripts/
 
 # C++ package build directories (packages/*/build/, e.g. packages/kuura-frost/)
 packages/*/build/
+packages/*/build-test/
 
 # Package-build-time generated headers (e.g. packages/kuura-frost/generated/cpp/tokens.h,
 # written by design/generate.py from design/tokens.json -- not checked in, see that

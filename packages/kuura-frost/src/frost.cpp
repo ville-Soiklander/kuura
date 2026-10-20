@@ -12,6 +12,11 @@
 #include <opengl/gltexture.h>
 #include <effect/effecthandler.h>
 #include <effect/effectwindow.h>
+// snapToPixels(): the SAME rounding OffscreenData::maybeRender() applies to the
+// window's expanded geometry before sizing Frost's captured texture
+// (effect/offscreeneffect.cpp at the pinned tag) -- apply() must reproduce it
+// exactly so the glass rect lands on the same device-pixel grid as the texture.
+#include <core/pixelgrid.h>
 
 // The generated tokens.h below is a package-build-time artifact (see
 // design/generators/cpp_header.py and packages/kuura-frost/PKGBUILD's build()),
@@ -25,6 +30,7 @@
 #include <QImage>
 #include <QRandomGenerator>
 #include <QVector2D>
+#include <QVector4D>
 
 // Confirmed live at /usr/include/kwin/wayland/surface.h -- KWin's OWN,
 // internally-namespaced Wayland server implementation (KWin::SurfaceInterface),
@@ -115,11 +121,13 @@ bool Frost::supported()
 int Frost::requestedEffectChainPosition() const
 {
     // See this method's own docstring in frost.h for the full, source-traced
-    // reasoning. Blur's confirmed value is 20 (blur.h); Frost must be LOWER.
-    // 10 leaves headroom on both sides (nothing else in this project's
-    // shipped effect set currently claims a position below 20) without
-    // crowding position 0.
-    return 10;
+    // reasoning and the live evidence. Blur's confirmed value is 20 (blur.h);
+    // Frost must be HIGHER so Blur draws the frosted backdrop onto the real
+    // render target before Frost composites the window over it. 30 stays below
+    // slidingpopups (40, slidingpopups.h at the pinned tag), so Frost's capture
+    // still includes the popup slide animation's own drawWindow() step exactly
+    // as it did before.
+    return 30;
 }
 
 void Frost::loadShaders()
@@ -294,6 +302,7 @@ void Frost::slotWindowDeleted(KWin::EffectWindow *window)
         disconnect(*it);
         m_surfaceBlurChangedConnections.erase(it);
     }
+    m_glassRects.remove(window);
 }
 
 void Frost::setupDecorationConnections(KWin::EffectWindow *window)
@@ -342,74 +351,114 @@ void Frost::slotPropertyNotify(KWin::EffectWindow *window, long atom)
 }
 #endif
 
-void Frost::updateWindowState(KWin::EffectWindow *window)
+std::optional<QRectF> Frost::glassBoundingRect(KWin::EffectWindow *window) const
 {
-    // Detection order mirrors BlurEffect::updateBlurRegion() exactly (blur.cpp
-    // at the pinned tag), per frost.h's class docstring -- Frost does not
-    // store the region's geometry, only whether a qualifying region exists
-    // from ANY of these sources.
-    bool wantsGlass = false;
+    // Mirrors BlurEffect::updateBlurRegion() + BlurEffect::blurRegion()
+    // (blur.cpp at the pinned tag) source by source, so Frost's glass rect is
+    // exactly the bounding box of the area Blur frosts -- the two effects must
+    // agree on WHERE the glass is, or the highlight would float off the
+    // blurred shape. Only the bounding box is kept: the shader works on one
+    // rectangle, and rounded corners inside it are handled by the captured
+    // texture's own alpha (frost_shader.h).
+    std::optional<KWin::RegionF> content;
+    std::optional<KWin::RegionF> frame;
 
 #if KWIN_BUILD_X11
     if (m_netWmBlurRegion != XCB_ATOM_NONE) {
         if (auto *x11Window = qobject_cast<KWin::X11Window *>(window->window())) {
             KWin::Xcb::Property wmBlurRegionProperty(
                 false, x11Window->window(), m_netWmBlurRegion, XCB_ATOM_CARDINAL, 0, 32768);
-            // The property's mere PRESENCE (any array at all, even
-            // zero-length -- "blur the whole window") is the signal Frost
-            // cares about; unlike Blur, it never needs the actual rectangles.
-            if (wmBlurRegionProperty.array<uint32_t>()) {
-                wantsGlass = true;
+            if (const auto cardinals = wmBlurRegionProperty.array<uint32_t>()) {
+                // Same encoding Blur decodes: 0 or 1 cardinals = "the whole
+                // window"; otherwise (x, y, w, h) quadruples in X native units.
+                if (cardinals->size() == 0 || cardinals->size() == 1) {
+                    content = KWin::RegionF();
+                } else if (cardinals->size() % 4 == 0) {
+                    KWin::RegionF region;
+                    for (size_t i = 0; i + 3 < cardinals->size(); i += 4) {
+                        const int x = static_cast<int>((*cardinals)[i]);
+                        const int y = static_cast<int>((*cardinals)[i + 1]);
+                        const int w = static_cast<int>((*cardinals)[i + 2]);
+                        const int h = static_cast<int>((*cardinals)[i + 3]);
+                        region += KWin::Xcb::fromXNative(KWin::Rect(x, y, w, h));
+                    }
+                    content = region;
+                }
             }
         }
     }
 #endif
 
-    if (!wantsGlass) {
-        if (KWin::SurfaceInterface *surface = window->surface()) {
-            wantsGlass = !surface->blurRegion().isEmpty();
+    if (KWin::SurfaceInterface *surface = window->surface()) {
+        if (!surface->blurRegion().isEmpty()) {
+            content = surface->blurRegion();
         }
     }
 
-    if (!wantsGlass) {
-        if (auto *internal = window->internalWindow()) {
-            wantsGlass = internal->property("kwin_blur").isValid();
+    if (auto *internal = window->internalWindow()) {
+        const QVariant property = internal->property("kwin_blur");
+        if (property.isValid()) {
+            content = property.value<KWin::RegionF>();
         }
     }
 
-    if (!wantsGlass && window->decorationHasAlpha() && window->decoration()
-        && !window->decoration()->blurRegion().isNull()) {
-        wantsGlass = true;
+    if (window->decorationHasAlpha() && window->decoration() && !window->decoration()->blurRegion().isNull()) {
+        // Blur's decorationBlurRegion(): the decoration's own blur region,
+        // limited to the decoration area (frame minus contents).
+        const KWin::RegionF decorationRegion = KWin::RegionF(window->decoration()->rect()) - window->contentsRect();
+        frame = decorationRegion.intersected(KWin::RegionF(window->decoration()->blurRegion()));
     }
 
-    if (wantsGlass) {
+    if (!content.has_value() && !frame.has_value()) {
+        return std::nullopt;
+    }
+
+    // Blur's blurRegion(): an EMPTY content region means "the whole contents
+    // rect"; a non-empty one is in contents-local coordinates and is clipped
+    // to the contents rect. The result is in frame-local logical coordinates.
+    KWin::RegionF region;
+    if (content.has_value()) {
+        const KWin::RectF contentsRect = window->contentsRect();
+        if (content->isEmpty()) {
+            region = contentsRect;
+        } else {
+            region = content->translated(contentsRect.topLeft()) & contentsRect;
+        }
+    }
+    if (frame.has_value()) {
+        region += frame.value();
+    }
+    return QRectF(region.boundingRect());
+}
+
+void Frost::updateWindowState(KWin::EffectWindow *window)
+{
+    // A window wants the glass material exactly when Blur would blur it (see
+    // glassBoundingRect()); the rect itself is cached here, on the change
+    // signals, rather than recomputed every frame in apply(), because the X11
+    // branch is a server round-trip.
+    const std::optional<QRectF> glassRect = glassBoundingRect(window);
+
+    if (glassRect.has_value()) {
+        m_glassRects.insert(window, *glassRect);
         redirect(window);
         setShader(window, m_shader.get());
-        // RESOLVED (see requestedEffectChainPosition()'s own docstring for
-        // the full trace): OffscreenData::maybeRender() -- the base class
-        // method that actually captures this window into Frost's FBO --
-        // always passes the PAINT_WINDOW_TRANSFORMED mask (confirmed at
-        // offscreeneffect.cpp), which makes BlurEffect::shouldBlur() refuse
-        // to blur UNLESS this window's WindowForceBlurRole data is true
-        // (confirmed at blur.cpp's shouldBlur(); the role itself is
-        // documented at effecthandler.h's DataRole enum as "for fullscreen
-        // effects to enforce blurring of windows" -- Frost's own capture is
-        // exactly that same kind of case). CrossFadeEffect (also in
-        // offscreeneffect.cpp) deliberately CLEARS this same role around its
-        // own capture, for the opposite reason (it does NOT want blur baked
-        // into its snapshot) -- confirming the flag is real and that
-        // inclusion is the default this project's design wants Frost to keep,
-        // not fight.
-        window->setData(KWin::WindowForceBlurRole, true);
+        // DELIBERATELY NOT setting WindowForceBlurRole any more (an earlier
+        // version did): with Frost AFTER Blur in the chain (see
+        // requestedEffectChainPosition()), Frost's own capture never reaches
+        // Blur at all, so the role would only have the side effect of forcing
+        // Blur on for this window during fullscreen effects and transformed
+        // paints, which Blur deliberately refuses (blur.cpp's shouldBlur()).
+        // Frost also must not clear the role on unredirect: another effect may
+        // own it.
     } else {
-        window->setData(KWin::WindowForceBlurRole, QVariant());
+        m_glassRects.remove(window);
         unredirect(window);
     }
 }
 
 void Frost::apply(KWin::EffectWindow *window, int mask, KWin::WindowPaintData &data, KWin::WindowQuadList &quads)
 {
-    Q_UNUSED(window)
     Q_UNUSED(mask)
     Q_UNUSED(data)
     Q_UNUSED(quads)
@@ -420,36 +469,44 @@ void Frost::apply(KWin::EffectWindow *window, int mask, KWin::WindowPaintData &d
 
     // `data`/`quads` are deliberately left untouched: the refraction offset and
     // specular highlight are pure per-pixel fragment-shader math
-    // (frost_shader.h), not a geometry or paint-data change -- this is the
-    // now-determined answer to frost.h's own apply() docstring question
-    // ("unmodified unless the refraction offset needs to be expressed as a
-    // geometry change... to be determined empirically against the real API").
-    //
-    // The ONLY real per-frame work left for apply(): rebind Frost's OWN noise
-    // texture to texture unit 1 before OffscreenData::paint() (base class,
-    // called right after this method returns -- offscreeneffect.cpp's
-    // OffscreenEffect::drawWindow(): `apply(...); maybeRender(); paint();`)
-    // draws this window with Frost's shader. See frost.h's apply() docstring
-    // ("FLAGGED, NOT SILENTLY WORKED AROUND") for why the UNIFORM VALUES
-    // themselves (including "the noise sampler reads unit 1") are fixed once in
-    // loadShaders() instead of here: this is a GL texture BINDING, not a
-    // uniform value, and glBindTexture() only cares about the currently ACTIVE
-    // unit, not which shader program happens to be bound -- so, unlike
-    // setUniform(), it is safe to call from apply(), before paint()'s own
-    // ShaderBinder binds Frost's shader.
-    //
-    // WHY this is also safe against paint()'s own later `m_texture->bind()`:
-    // GLTexture::bind() (opengl/gltexture.cpp, fetched at the pinned tag) never
-    // calls glActiveTexture() itself -- it only binds to whichever unit is
-    // already active. Restoring unit 0 as active before returning (without
-    // unbinding unit 1's own texture -- "active" only controls which unit the
-    // NEXT bind/parameter call affects) is what keeps that assumption intact:
-    // paint()'s `m_texture->bind()` lands on unit 0 as it always has, while
-    // unit 1 still holds Frost's noise texture for the shader's noiseSampler
-    // uniform (fixed to 1 at link time) to read from. Nothing in the real,
-    // fetched rendering path this window's capture/paint touches (blur.cpp,
-    // glshader.cpp, gltexture.cpp, offscreeneffect.cpp) calls glActiveTexture()
-    // at all, so no other code silently steals unit 1 in between either.
+    // (frost_shader.h), not a geometry or paint-data change.
+
+    // ---- Per-window glass rect (frost_shader.h's `glassRect` uniform) ----
+    // The captured texture spans the window's EXPANDED geometry (shadow
+    // included), snapped with the output scale exactly as
+    // OffscreenData::maybeRender() does; the cached glass rect is frame-local
+    // logical. Translate it into the texture's own device-pixel grid.
+    QVector4D glassRectUniform(0.0F, 0.0F, 0.0F, 0.0F);
+    const auto glassIt = m_glassRects.constFind(window);
+    if (glassIt != m_glassRects.constEnd() && window->screen()) {
+        const qreal scale = window->screen()->scale();
+        const QRectF expanded = KWin::snapToPixels(QRectF(window->expandedGeometry()), scale);
+        const QRectF frameGeometry = KWin::snapToPixels(QRectF(window->frameGeometry()), scale);
+        const QPointF frameOffset = frameGeometry.topLeft() - expanded.topLeft();
+        const QRectF glass = glassIt->translated(frameOffset);
+        glassRectUniform = QVector4D(static_cast<float>(glass.x() * scale), static_cast<float>(glass.y() * scale),
+                                     static_cast<float>(glass.width() * scale), static_cast<float>(glass.height() * scale));
+    }
+    // WHY push/pop here although apply() runs before OffscreenData::paint()
+    // binds the shader: GLShader::setUniform() is a bare glUniform*() call that
+    // targets the CURRENTLY BOUND program, so binding Frost's program for the
+    // duration of the call (the same idiom blur.cpp uses for its own passes) is
+    // what makes it land in Frost's program. Uniform values are program state:
+    // they survive the unbind and are still there when paint() binds the same
+    // program a moment later for THIS window, and apply() runs again for every
+    // window before its own paint(), so each window gets its own rect.
+    KWin::ShaderManager::instance()->pushShader(m_shader.get());
+    m_shader->setUniform("glassRect", glassRectUniform);
+    KWin::ShaderManager::instance()->popShader();
+
+    // ---- Noise texture binding (texture unit 1) ----
+    // A GL texture BINDING, not a uniform value: glBindTexture() only cares
+    // about the currently ACTIVE unit, not which program is bound, so it is
+    // safe here before paint()'s own ShaderBinder. GLTexture::bind()
+    // (opengl/gltexture.cpp at the pinned tag) never calls glActiveTexture()
+    // itself, so restoring unit 0 as active before returning keeps paint()'s
+    // `m_texture->bind()` on unit 0 while unit 1 still holds the noise texture
+    // the shader's noiseSampler (fixed to 1 at link time) reads.
     glActiveTexture(GL_TEXTURE1);
     m_noiseTexture->bind();
     glActiveTexture(GL_TEXTURE0);

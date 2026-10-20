@@ -11,7 +11,7 @@
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-welcome"
 pkgver=0.1.0
-pkgrel=3
+pkgrel=5
 pkgdesc="First-login welcome window: appearance, shortcuts and settings"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'

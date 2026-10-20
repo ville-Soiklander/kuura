@@ -20,7 +20,7 @@
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-frost"
 pkgver=0.1.0
-pkgrel=2
+pkgrel=4
 pkgdesc="Glass 'material' KWin compositor effect (background blur reuse, edge refraction, specular highlight, dither noise)"
 # Unlike kuura-desktop/kuura-shell (arch=('any'): pure config/scripts), this
 # package compiles a native .so against KWin's C++ effect ABI, which is NOT
@@ -71,7 +71,8 @@ depends=('kwin')
 # already includes kdecoration directly, so makepkg's --syncdeps installs it
 # transitively via the 'kwin' entry below; adding it again explicitly would
 # only duplicate an already-guaranteed dependency, not fix a real gap.
-makedepends=('extra-cmake-modules' 'cmake' 'ninja' 'qt6-base' 'kwin' 'kcoreaddons' 'vulkan-headers' 'python')
+makedepends=('extra-cmake-modules' 'cmake' 'ninja' 'qt6-base' 'kwin' 'kcoreaddons' 'vulkan-headers' 'python'
+             'mesa' 'libglvnd')
 
 # build(): generates the real material.* C++ header from design/tokens.json,
 # THEN configures and builds the CMake project in place. The design.generate
@@ -94,6 +95,22 @@ build() {
 
     ( cd "$srcdir/.." && cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr \
         && cmake --build build )
+}
+
+# check(): runs the headless shader-correctness test (tests/offscreen_shader_test.cpp)
+# against the same frost_shader.h and generated tokens.h the shipped plugin uses, so a
+# token or shader change that breaks the hand-computed per-pixel expectations fails the
+# package build instead of shipping. It is configured in a SEPARATE build directory
+# (build-test) with KUURA_FROST_BUILD_TESTS=ON so the shipped build/ tree never needs
+# EGL/GL (mesa is a makedepends entry for the test only). The build container has no
+# display and no GPU: EGL_PLATFORM=surfaceless plus LIBGL_ALWAYS_SOFTWARE=1 force Mesa's
+# llvmpipe rasteriser, which is also deterministic across hosts.
+check() {
+    cd "$srcdir/.."
+    cmake -S . -B build-test -G Ninja -DKUURA_FROST_BUILD_TESTS=ON
+    cmake --build build-test --target kuura_frost_offscreen_shader_test
+    EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 \
+        ./build-test/bin/kuura_frost_offscreen_shader_test
 }
 
 # package(): installs the just-built plugin (.so + metadata.json) via CMake's

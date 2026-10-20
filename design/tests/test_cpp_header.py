@@ -186,9 +186,9 @@ def test_real_tokens_produce_the_five_frost_material_constants() -> None:
     text = render(real_tokens)
     assert "inline constexpr float kMaterialRefractionStrength = 0.035f;" in text
     assert "inline constexpr int kMaterialRefractionEdgeFalloff = 12;" in text
-    assert "inline constexpr float kMaterialEdgeHighlightWidth = 1.0f;" in text
-    assert "inline constexpr float kMaterialEdgeHighlightOpacity = 0.28f;" in text
-    assert "inline constexpr float kMaterialNoise = 0.02f;" in text
+    assert "inline constexpr float kMaterialEdgeHighlightWidth = 1.5f;" in text
+    assert "inline constexpr float kMaterialEdgeHighlightOpacity = 0.55f;" in text
+    assert "inline constexpr float kMaterialNoise = 0.03f;" in text
 
 
 def test_real_tokens_changing_a_material_value_only_changes_that_constant() -> None:
@@ -216,3 +216,10 @@ def test_real_tokens_color_values_never_leak_in() -> None:
     for mode in ("light", "dark"):
         for value in real_tokens["color"][mode].values():
             assert value not in text
+
+
+def test_real_tokens_export_the_stroke_constants() -> None:
+    """stroke.* reach C++ as float constants with the real token values."""
+    text = render(json.loads(REAL_TOKENS_PATH.read_text(encoding="utf-8")))
+    assert "inline constexpr float kStrokeHairline = 1.0f;" in text
+    assert "inline constexpr float kStrokeFocus = 2.0f;" in text

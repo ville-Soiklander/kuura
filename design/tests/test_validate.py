@@ -351,3 +351,45 @@ class TestValidateComprehensive:
         # Should complain about all missing top-level sections
         assert any("radius" in e for e in errors)
         assert any("color" in e for e in errors)
+
+
+class TestStrokeTokens:
+    """stroke.* are UI line widths, independent of the Frost glass material.*."""
+
+    @pytest.mark.parametrize("path,value", [
+        ("hairline", -1), ("hairline", 0.4), ("hairline", 4.5), ("hairline", "1"),
+        ("hairline", True), ("focus", -2), ("focus", 0.4), ("focus", 8.5), ("focus", None),
+    ])
+    def test_out_of_range_or_wrong_type_is_rejected(self, tokens_real, path, value):
+        """Values outside the real-world range or of the wrong type are reported."""
+        mutated = copy.deepcopy(tokens_real)
+        mutated["stroke"][path] = value
+        assert any(e.startswith(f"stroke.{path}") for e in validate(mutated))
+
+    @pytest.mark.parametrize("path,value", [
+        ("hairline", 0.5), ("hairline", 4), ("focus", 0.5), ("focus", 8),
+    ])
+    def test_range_boundaries_are_accepted(self, tokens_real, path, value):
+        """Both edges of each range are valid."""
+        mutated = copy.deepcopy(tokens_real)
+        mutated["stroke"][path] = value
+        assert validate(mutated) == []
+
+    def test_missing_and_unknown_keys_are_reported(self, tokens_real):
+        """The stroke section is closed: missing and extra keys are errors."""
+        mutated = copy.deepcopy(tokens_real)
+        del mutated["stroke"]["focus"]
+        mutated["stroke"]["bogus"] = 1
+        errors = validate(mutated)
+        assert any("stroke.focus" in e and "missing" in e for e in errors)
+        assert any("stroke.bogus" in e for e in errors)
+
+    def test_missing_section_is_reported(self, tokens_real):
+        """Dropping the whole section fails validation."""
+        mutated = copy.deepcopy(tokens_real)
+        del mutated["stroke"]
+        assert any(e.startswith("stroke") for e in validate(mutated))
+
+    def test_real_values_are_independent_of_the_glass_edge(self, tokens_real):
+        """Hairline and focus keep 1 and 2 px whatever the Frost edge width is."""
+        assert tokens_real["stroke"] == {"hairline": 1.0, "focus": 2.0}

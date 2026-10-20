@@ -339,3 +339,11 @@ def test_package_files_contain_no_forbidden_names() -> None:
     paths += [GUEST_SKEL / f"{NAME}-welcomerc", GUEST_SKEL / "kwinrulesrc"]
     assert paths
     assert check_forbidden_terms.main([str(p) for p in paths]) == 0
+
+
+def test_qml_takes_line_widths_from_stroke_tokens_not_the_glass_material() -> None:
+    """Hairlines and focus rings use stroke.*; material.* tunes the Frost effect only."""
+    raw = QML_FILE.read_text(encoding="utf-8")
+    assert not re.search(r"materialEdge\w*", raw)
+    assert "tk.strokeHairline" in raw
+    assert "tk.strokeFocus" in raw

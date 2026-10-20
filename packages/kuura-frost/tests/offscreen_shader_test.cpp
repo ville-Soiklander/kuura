@@ -15,23 +15,26 @@
 // output (that would prove nothing). Point 4 (dither noise) is inherently
 // random by design and cannot have a single "hand-computed" expected value;
 // it is instead checked for the correct BOUNDED, non-negative, additive
-// contribution its own formula promises (see checkNoiseIsAdditiveAndBounded()).
+// contribution its own formula promises (see expectNoiseBounded in main()).
 //
 // TEST GEOMETRY (chosen once, reused by every check below):
 //   - windowSize (the shader's own textureWidth/textureHeight uniforms) =
 //     100 x 50 "pixels". The output framebuffer is rendered at exactly this
-//     100x50 resolution, so pixel (px, py) [0-indexed, glReadPixels convention]
-//     has a fragment-shader texcoord0 of exactly ((px+0.5)/100, (py+0.5)/50),
-//     i.e. pixelPos = (px+0.5, py+0.5) -- clean half-integers, no rasterization
-//     rounding ambiguity to account for by hand.
-//   - The vertex data below maps texcoord (0,0) to window pixel (0,0) and
-//     texcoord (1,1) to window pixel (100,50) with NO flip (the simplest
-//     possible, self-consistent convention) -- this test only needs to verify
-//     the DOCUMENTED FORMULAS are implemented correctly, not to reproduce any
-//     particular real-world screen orientation (frost.h's own apply()
-//     docstring does not specify one either, and this project's "verify live"
-//     rule means that question stays open for a real screenshot, not guessed
-//     here -- see this file's own report notes).
+//     100x50 resolution, so pixel (px, py) [0-indexed, glReadPixels convention,
+//     row 0 = BOTTOM] has a fragment-shader texcoord0 of exactly
+//     ((px+0.5)/100, (py+0.5)/50).
+//   - The shader converts texcoord0 to a TOP-LEFT-origin pixel position,
+//     pixelPos = (u * 100, (1 - v) * 50), because KWin hands it GL's bottom-up
+//     v axis (GLTexture::matrix() flips v for the FBO-allocated capture
+//     texture, and the capture renders the window's top at high v). So
+//     readPixel(px, py) shows pixelPos = (px + 0.5, 50 - (py + 0.5)): the
+//     window's TOP edge is glReadPixels row 49, its BOTTOM edge is row 0. The
+//     TOP EDGE / BOTTOM EDGE checks below pin this orientation down; an
+//     earlier version of the shader had it upside down (highlight on the
+//     bottom edge), which no check caught because none looked at it.
+//   - glassRect (the shader's per-window blur-region bounding box, top-left
+//     origin, device pixels) is (0, 0, 100, 50) -- the whole texture -- for
+//     passes 1-2, a strict sub-rect for pass 3, all-zero for pass 4.
 //   - The input "captured background" texture is a 512x512 RGBA8 gradient,
 //     GL_LINEAR filtered, GL_CLAMP_TO_EDGE wrapped, where texel (tx, ty) [any
 //     of the 512x512 grid] stores R = round(u_center*255), G =
@@ -75,6 +78,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <tuple>
 #include <vector>
 
 namespace
@@ -244,7 +248,7 @@ std::vector<uint8_t> buildGradientTexture()
  * frost.cpp's own generateNoiseTexture() uses, just at a smaller resolution
  * (this test only checks the noise contribution's BOUNDS, never an exact
  * value, so the tile size and its exact random content do not matter -- see
- * checkNoiseIsAdditiveAndBounded()).
+ * expectNoiseBounded in main()).
  */
 std::vector<uint8_t> buildNoiseTexture()
 {
@@ -486,124 +490,192 @@ int main()
     };
     glUniformMatrix4fv_(glGetUniformLocation_(program, "modelViewProjectionMatrix"), 1, GL_FALSE, identityMvp);
 
+    const GLint glassRectLocation = glGetUniformLocation_(program, "glassRect");
+    glUniform4f_(glassRectLocation, 0.0F, 0.0F, static_cast<float>(kWindowWidth), static_cast<float>(kWindowHeight));
+
     bool allPassed = true;
 
+    // Draws the full-screen quad once with the current uniforms/textures.
+    const auto draw = []() {
+        glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    };
+    // Compares one read-back pixel against four hand-computed channel values.
+    const auto expectPixel = [&allPassed](const char *title, int px, int py, double r, double g, double b, double a) {
+        std::printf("%s (%d,%d):\n", title, px, py);
+        const SampledPixel pixel = readPixel(px, py);
+        nearlyEqual(pixel.r, r, "R", allPassed);
+        nearlyEqual(pixel.g, g, "G", allPassed);
+        nearlyEqual(pixel.b, b, "B", allPassed);
+        nearlyEqual(pixel.a, a, "A", allPassed);
+    };
+
     // =========================================================================
-    // PASS 1: noiseAmount = 0, so every check below is fully deterministic and
-    // matches frost.h's apply() docstring points 1-3 exactly (edge distance,
-    // refraction, specular highlight) with no random contribution to account
-    // for.
+    // PASS 1: glassRect = whole texture, noiseAmount = 0, so every check is
+    // fully deterministic (apply() docstring points 1-3).
+    // Shared numbers: refraction max = strength*edge_falloff = 0.035*12 = 0.42px;
+    // The highlight width and opacity are the REAL tokens, so the expected
+    // values below are derived from them instead of being pinned to one pair
+    // of numbers (a deliberate material retune must not need a test edit):
+    // at pixelPos 0.5 from a lit edge, highlight = 1 - 0.5/width and the mix
+    // factor is k = highlight * opacity; an opaque (a=255) input mixes toward
+    // 255 (premultiplied white at full coverage). The worked examples in the
+    // comments below use the original tokens (width 1.0, opacity 0.28 ->
+    // highlight 0.5, k = 0.14); the arithmetic is the same for any tokens.
+    // Sample positions are clamped into [0.5, size-0.5] of the glass rect.
     // =========================================================================
     glUniform1f_(noiseAmountLocation, 0.0F);
-    glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    draw();
+    const double highlightK =
+        (1.0 - 0.5 / static_cast<double>(Kuura::Tokens::kMaterialEdgeHighlightWidth)) * Kuura::Tokens::kMaterialEdgeHighlightOpacity;
+    // Mixes one channel toward the (premultiplied) white level `whiteLevel`.
+    const auto mixK = [highlightK](double channel, double whiteLevel) { return channel * (1.0 - highlightK) + whiteLevel * highlightK; };
 
-    // ---- CORNER: pixel (0, 0) -> pixelPos = (0.5, 0.5) ----
-    // distLeft=0.5, distRight=99.5, distTop=0.5, distBottom=49.5 -> edgeDist=0.5
-    // (a tie between distLeft and distTop; the shader's if/else checks distLeft
-    // FIRST, so normal = (-1, 0), the LEFT edge -- see frost_shader.h's own
-    // comment on this deliberate, documented tie-break order).
-    // falloff = clamp(1 - 0.5/12, 0, 1) = 0.958333...
-    // offsetPixels = (-1,0) * (0.035*12) * 0.958333 = (-0.402500, 0)
-    // texcoord0 = (0.5/100, 0.5/50) = (0.005, 0.01)
-    // offsetUV = (-0.402500/100, 0) = (-0.0040250, 0)
-    // refractedUv = (0.005 - 0.0040250, 0.01) = (0.0009750, 0.01)
-    // refracted.r (0..255) ~= 0.0009750*255 = 0.24863
-    // refracted.g (0..255) ~= 0.01*255 = 2.55
-    // refracted.b = 128 (constant, unaffected by refraction)
-    // highlight: topStrength = clamp(1-0.5/1.0,0,1)=0.5, leftStrength=0.5,
-    //            highlight = max(0.5,0.5) = 0.5; opacity=0.28 -> mix factor 0.14
-    // highlighted.r = 0.24863*(1-0.14) + 255*0.14 = 0.21382 + 35.7 = 35.914
-    // highlighted.g = 2.55*(1-0.14) + 255*0.14 = 2.193 + 35.7 = 37.893
-    // highlighted.b = 128*(1-0.14) + 255*0.14 = 110.08 + 35.7 = 145.78
-    {
-        std::printf("CORNER (0,0):\n");
-        const SampledPixel px = readPixel(0, 0);
-        nearlyEqual(px.r, 35.914, "R", allPassed);
-        nearlyEqual(px.g, 37.893, "G", allPassed);
-        nearlyEqual(px.b, 145.78, "B", allPassed);
-        nearlyEqual(px.a, 255.0, "A", allPassed);
-    }
+    // ---- TOP-LEFT CORNER: readPixel(0, 49) -> pixelPos = (0.5, 0.5) ----
+    // distLeft = distTop = 0.5 (tie -> LEFT, checked first), normal (-1, 0).
+    // falloff = 1 - 0.5/12 = 0.958333; offset = -0.42*0.958333 = -0.4025px
+    // sampleLocal = clamp((0.0975, 0.5), 0.5, ...) = (0.5, 0.5) -- the clamp
+    // keeps the sample inside the glass, so no net displacement here.
+    // refractedUv = (0.5/100, 1 - 0.5/50) = (0.005, 0.99)
+    // refracted = (0.005*255, 0.99*255, 128) = (1.275, 252.45, 128)
+    // highlight max(0.5, 0.5) = 0.5 -> k = 0.14:
+    //   r = 1.275*0.86 + 255*0.14 = 1.0965 + 35.7 = 36.797
+    //   g = 252.45*0.86 + 35.7 = 217.107 + 35.7 = 252.807
+    //   b = 128*0.86 + 35.7 = 110.08 + 35.7 = 145.78
+    expectPixel("TOP-LEFT CORNER", 0, 49, mixK(1.275, 255.0), mixK(252.45, 255.0), mixK(128.0, 255.0), 255.0);
 
-    // ---- EDGE MIDPOINT: pixel (50, 5) -> pixelPos = (50.5, 5.5), a known
-    // distance (5.5px) from the top edge, well inside refractionEdgeFalloff
-    // (12px) but far outside edgeHighlightWidth (1.0px), isolating pure
-    // refraction with zero highlight contribution. ----
-    // distLeft=50.5, distRight=49.5, distTop=5.5, distBottom=44.5 -> edgeDist=5.5
-    // (top edge, normal=(0,-1))
-    // falloff = clamp(1 - 5.5/12, 0, 1) = 0.541667
-    // offsetPixels = (0,-1) * 0.42 * 0.541667 = (0, -0.227500)
-    // texcoord0 = (50.5/100, 5.5/50) = (0.505, 0.11)
-    // offsetUV = (0, -0.227500/50) = (0, -0.0045500)
-    // refractedUv = (0.505, 0.11 - 0.0045500) = (0.505, 0.105450)
-    // refracted.r ~= 0.505*255 = 128.775; refracted.g ~= 0.105450*255 = 26.890
-    // highlight: topStrength=clamp(1-5.5/1.0,0,1)=0 (negative clamps to 0),
-    //            leftStrength=clamp(1-50.5/1.0,0,1)=0, highlight=0 -> no mixing
-    // highlighted == refracted exactly (mix factor 0)
-    {
-        std::printf("EDGE MIDPOINT (50,5):\n");
-        const SampledPixel px = readPixel(50, 5);
-        nearlyEqual(px.r, 128.775, "R", allPassed);
-        nearlyEqual(px.g, 26.890, "G", allPassed);
-        nearlyEqual(px.b, 128.0, "B", allPassed);
-        nearlyEqual(px.a, 255.0, "A", allPassed);
-    }
+    // ---- TOP EDGE: readPixel(50, 49) -> pixelPos = (50.5, 0.5) ----
+    // Proves the orientation: the window's TOP edge (lit) is row 49.
+    // distTop = 0.5 -> normal (0, -1); offset y = -0.4025 -> clamped to 0.5.
+    // refractedUv = (0.505, 0.99) -> (128.775, 252.45, 128)
+    // highlight: top 0.5, left 0 -> k = 0.14:
+    //   r = 128.775*0.86 + 35.7 = 110.7465 + 35.7 = 146.447
+    //   g = 252.807, b = 145.78 (as above)
+    expectPixel("TOP EDGE", 50, 49, mixK(128.775, 255.0), mixK(252.45, 255.0), mixK(128.0, 255.0), 255.0);
 
-    // ---- CENTRE: pixel (50, 25) -> pixelPos = (50.5, 25.5) ----
-    // distLeft=50.5, distRight=49.5, distTop=25.5, distBottom=24.5 ->
-    // edgeDist=24.5, WELL BEYOND refractionEdgeFalloff (12) -> falloff =
-    // clamp(1 - 24.5/12, 0, 1) = clamp(-1.0417, 0, 1) = 0 -> no refraction at all.
-    // highlight: topStrength=clamp(1-25.5/1.0,0,1)=0, leftStrength=clamp(1-50.5/1.0,0,1)=0,
-    //            highlight=0 -> no highlight either.
-    // So the centre pixel is an UNMODIFIED sample of the input texture at its
-    // own texcoord0 = (50.5/100, 25.5/50) = (0.505, 0.51).
-    // r ~= 0.505*255=128.775, g ~= 0.51*255=130.05, b=128 (constant)
-    {
-        std::printf("CENTRE (50,25):\n");
-        const SampledPixel px = readPixel(50, 25);
-        nearlyEqual(px.r, 128.775, "R", allPassed);
-        nearlyEqual(px.g, 130.05, "G", allPassed);
-        nearlyEqual(px.b, 128.0, "B", allPassed);
-        nearlyEqual(px.a, 255.0, "A", allPassed);
-    }
+    // ---- BOTTOM EDGE: readPixel(50, 0) -> pixelPos = (50.5, 49.5) ----
+    // Unlit edge: NO highlight. distBottom = 0.5 -> normal (0, 1);
+    // offset y = +0.4025 -> 49.9025 -> clamped to 49.5.
+    // refractedUv = (0.505, 1 - 49.5/50) = (0.505, 0.01) -> (128.775, 2.55, 128)
+    expectPixel("BOTTOM EDGE", 50, 0, 128.775, 2.55, 128.0, 255.0);
+
+    // ---- NEAR-BOTTOM REFRACTION: readPixel(50, 5) -> pixelPos = (50.5, 44.5) ----
+    // distBottom = 5.5 (inside the 12px falloff, outside the 1px highlight).
+    // falloff = 1 - 5.5/12 = 0.541667; offset = (0, +0.42*0.541667) = (0, 0.2275)
+    // sample pixelPos = (50.5, 44.7275) -> refractedUv = (0.505, 1 - 0.89455)
+    //   = (0.505, 0.10545) -> r = 128.775, g = 26.890; no highlight.
+    expectPixel("NEAR-BOTTOM REFRACTION", 50, 5, 128.775, 26.890, 128.0, 255.0);
+
+    // ---- CENTRE: readPixel(50, 25) -> pixelPos = (50.5, 24.5) ----
+    // edgeDist = min(50.5, 49.5, 24.5, 25.5) = 24.5 > 12 -> no refraction, no
+    // highlight: an unmodified sample at texcoord0 = (0.505, 0.51).
+    expectPixel("CENTRE", 50, 25, 128.775, 130.05, 128.0, 255.0);
     const SampledPixel centreNoNoise = readPixel(50, 25);
 
     // =========================================================================
-    // PASS 2: noiseAmount = the REAL design/tokens.json value
-    // (Kuura::Tokens::kMaterialNoise), same centre pixel. Point 4 of apply()'s
-    // docstring adds `noiseSample * noiseAmount` to each RGB channel, where
-    // noiseSample is a per-fragment value in [0, 1) sampled from Frost's own
-    // noise texture -- inherently random BY DESIGN (it exists to break up
-    // banding), so there is no single correct "expected value" to hand-compute
-    // the way there is for points 1-3. What IS exactly knowable from the
-    // formula, and checked here: the delta this pass introduces at the SAME
-    // pixel must be (a) non-negative (noise only ever ADDS: noiseSample >= 0
-    // and noiseAmount >= 0) and (b) no larger than noiseAmount*255 (since
-    // noiseSample < 1) -- both with the same epsilon budget as every other
-    // check, to absorb 8-bit quantization on both sides of the comparison.
+    // PASS 2: noiseAmount = the REAL token value (Kuura::Tokens::kMaterialNoise),
+    // same centre pixel. Noise is random by design, so only its formula's
+    // BOUNDS are checked: delta = noiseSample * noiseAmount * alpha with
+    // noiseSample in [0, 1) and alpha = 1 here -> 0 <= delta < noiseAmount*255.
     // =========================================================================
     glUniform1f_(noiseAmountLocation, Kuura::Tokens::kMaterialNoise);
-    glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    {
-        std::printf("CENTRE (50,25) WITH NOISE (bounded-delta check, noiseAmount=%.4f):\n", Kuura::Tokens::kMaterialNoise);
-        const SampledPixel px = readPixel(50, 25);
-        const double maxDelta = Kuura::Tokens::kMaterialNoise * 255.0;
-        for (const auto &[label, withNoise, without] : {
-                 std::tuple{"R", px.r, centreNoNoise.r},
-                 std::tuple{"G", px.g, centreNoNoise.g},
-                 std::tuple{"B", px.b, centreNoNoise.b},
+    draw();
+    const auto expectNoiseBounded = [&allPassed](const char *title, const SampledPixel &with, const SampledPixel &without, double maxDelta) {
+        std::printf("%s (bounded-delta check, max %.3f):\n", title, maxDelta);
+        for (const auto &[label, withNoise, withoutNoise] : {
+                 std::tuple{"R", with.r, without.r},
+                 std::tuple{"G", with.g, without.g},
+                 std::tuple{"B", with.b, without.b},
              }) {
-            const double delta = withNoise - without;
+            const double delta = withNoise - withoutNoise;
             const bool ok = delta >= -kEpsilonBytes && delta <= maxDelta + kEpsilonBytes;
             std::printf("  %-28s delta=%7.3f bounds=[%.3f, %.3f] %s\n", label, delta, -kEpsilonBytes, maxDelta + kEpsilonBytes, ok ? "OK" : "FAIL");
             if (!ok) {
                 allPassed = false;
             }
         }
+    };
+    expectNoiseBounded("CENTRE WITH NOISE", readPixel(50, 25), centreNoNoise, Kuura::Tokens::kMaterialNoise * 255.0);
+
+    // =========================================================================
+    // PASS 3: glassRect = (20, 10, 60, 30) -- a strict sub-rect, the real
+    // situation (the capture texture includes the shadow margin around the
+    // glass). Edges are those of the RECT; outside it the texture passes
+    // through unmodified -- not even noise (noiseAmount stays non-zero here on
+    // purpose, so a leak would show up as a non-zero delta).
+    // =========================================================================
+    glUniform4f_(glassRectLocation, 20.0F, 10.0F, 60.0F, 30.0F);
+    draw();
+
+    // ---- OUTSIDE (shadow margin): readPixel(5, 25) -> pixelPos = (5.5, 24.5) ----
+    // local.x = -14.5 < 0 -> passthrough of texcoord0 = (0.055, 0.51):
+    //   r = 0.055*255 = 14.025, g = 130.05, b = 128 -- exact, no noise added.
+    // (Pass 1's shader geometry would have refracted AND, near the old texture
+    // edge, highlighted this pixel; that is exactly the shadow-edge artefact.)
+    expectPixel("OUTSIDE GLASS RECT", 5, 25, 14.025, 130.05, 128.0, 255.0);
+
+    glUniform1f_(noiseAmountLocation, 0.0F);
+    draw();
+
+    // ---- GLASS TOP-LEFT CORNER: readPixel(20, 39) -> pixelPos = (20.5, 10.5) ----
+    // local = (0.5, 0.5) -> as pass 1's corner, the sample clamps to local
+    // (0.5, 0.5) = pixelPos (20.5, 10.5) -> uv (0.205, 1 - 0.21) = (0.205, 0.79)
+    // refracted = (52.275, 201.45, 128); k = 0.14:
+    //   r = 52.275*0.86 + 35.7 = 44.9565 + 35.7 = 80.657
+    //   g = 201.45*0.86 + 35.7 = 173.247 + 35.7 = 208.947
+    //   b = 145.78
+    expectPixel("GLASS TOP-LEFT CORNER", 20, 39, mixK(52.275, 255.0), mixK(201.45, 255.0), mixK(128.0, 255.0), 255.0);
+
+    // ---- NEAR GLASS RIGHT EDGE: readPixel(75, 24) -> pixelPos = (75.5, 25.5) ----
+    // local = (55.5, 15.5): distRight = 60 - 55.5 = 4.5 is the minimum
+    // (left 55.5, top 15.5, bottom 14.5) -> normal (1, 0).
+    // falloff = 1 - 4.5/12 = 0.625; offset x = 0.42*0.625 = 0.2625
+    // sample pixelPos = (75.7625, 25.5) -> uv (0.757625, 0.49)
+    //   r = 0.757625*255 = 193.194, g = 0.49*255 = 124.95, b = 128; no highlight.
+    expectPixel("NEAR GLASS RIGHT EDGE", 75, 24, 193.194, 124.95, 128.0, 255.0);
+
+    // =========================================================================
+    // PASS 4: glassRect all zero (the GLSL default before Frost::apply() has
+    // uploaded one) -> the material is disabled, everything passes through.
+    // readPixel(0, 49): texcoord0 = (0.005, 0.99) -> (1.275, 252.45, 128) with
+    // no highlight (pass 1 put 36.797/252.807/145.78 here).
+    // =========================================================================
+    glUniform4f_(glassRectLocation, 0.0F, 0.0F, 0.0F, 0.0F);
+    draw();
+    expectPixel("ZERO GLASS RECT PASSTHROUGH", 0, 49, 1.275, 252.45, 128.0, 255.0);
+
+    // =========================================================================
+    // PASS 5: PREMULTIPLIED, HALF-COVERED input. The capture is premultiplied
+    // (OffscreenData::paint() blends GL_ONE, GL_ONE_MINUS_SRC_ALPHA), so the
+    // highlight must mix toward (a, a, a), not 255, and noise must scale with
+    // a -- otherwise a transparent texel (a rounded corner inside the
+    // bounding rect) would emit light over Blur's backdrop.
+    // Input: a uniform premultiplied (64, 64, 64, 128) texture.
+    // =========================================================================
+    {
+        std::vector<uint8_t> pixels(static_cast<size_t>(kGradientTextureSize) * kGradientTextureSize * 4, 0);
+        for (size_t i = 0; i < pixels.size(); i += 4) {
+            pixels[i + 0] = 64;
+            pixels[i + 1] = 64;
+            pixels[i + 2] = 64;
+            pixels[i + 3] = 128;
+        }
+        glActiveTexture_(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, gradientTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kGradientTextureSize, kGradientTextureSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     }
+    glUniform4f_(glassRectLocation, 0.0F, 0.0F, static_cast<float>(kWindowWidth), static_cast<float>(kWindowHeight));
+    glUniform1f_(noiseAmountLocation, 0.0F);
+    draw();
+    // Corner k = 0.14: rgb = 64*0.86 + 128*0.14 = 55.04 + 17.92 = 72.96; a = 128.
+    // (Mixing toward 255 instead would give 90.74 -- outside the epsilon.)
+    expectPixel("HALF-COVERED CORNER", 0, 49, mixK(64.0, 128.0), mixK(64.0, 128.0), mixK(64.0, 128.0), 128.0);
+    const SampledPixel halfCentreNoNoise = readPixel(50, 25);
+    glUniform1f_(noiseAmountLocation, Kuura::Tokens::kMaterialNoise);
+    draw();
+    // Noise delta bound scales with coverage: noiseAmount * 255 * (128/255).
+    expectNoiseBounded("HALF-COVERED CENTRE WITH NOISE", readPixel(50, 25), halfCentreNoNoise, Kuura::Tokens::kMaterialNoise * 128.0);
 
     std::printf("\n%s\n", allPassed ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED");
     return allPassed ? EXIT_SUCCESS : EXIT_FAILURE;

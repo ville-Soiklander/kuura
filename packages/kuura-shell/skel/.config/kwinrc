@@ -23,12 +23,16 @@
 # Nothing here is a guessed key name - see the V3 investigation notes handed back
 # with this change for the full trail (commands run, exact output, screenshots).
 #
-# ---- Window buttons on the left [Windows] ----
-# ButtonsOnLeft / ButtonsOnRight are exactly the well-documented KWin keys the brief
-# expected. Letters are KDecoration3's standard button codes: I=minimize, A=maximize,
-# X=close. All three move to the left edge of the titlebar; the right side is empty.
+# ---- Window buttons on the left [org.kde.kdecoration2] ----
+# The layout keys are read from the decoration settings group
+# (/usr/share/config.kcfg/kwindecorationsettings.kcfg: group org.kde.kdecoration2,
+# keys ButtonsOnLeft / ButtonsOnRight). An earlier revision wrote them under [Windows],
+# which KWin never reads, so KDE's default layout stayed in force (2026-10-20).
+# Letters are KDecoration's standard button codes: X=close, I=minimize, A=maximize.
+# Order is left to right: close, minimize, maximize. The right side is empty and no
+# application-menu (M) button is listed, because the project's visual language has none.
 #
-# ---- Border size [org.kde.kdecoration2] ----
+# ---- Border size (same group) ----
 # KWin 6.7.5 still uses this LEGACY group name (not a new "kdecoration3" one) for the
 # decoration's border-size choice - confirmed live: the "Window Decorations" KCM
 # writes exactly this key when a preset other than its own top entry is picked.
@@ -51,25 +55,16 @@
 # or hand-rolled. RoundedCorners=true is still set because it is the correct,
 # directionally-right, zero-cost choice while that decision is pending.
 #
-# ---- CAVEAT: visual effect not provable live in this image (report this) ----
-# In the current guest image, EVERY window observed - including the already-approved
-# V2 golden screenshots (harness/goldens/*/files-window.png) - renders a plain,
-# generic titlebar (an icon, a centred title, one dropdown chevron and a close
-# button), not Breeze's normal three-button chrome, regardless of any key below.
-# Across repeated live tests, kwriteconfig6 always exits 0, `cat kwinrc` always shows
-# the value written, and `qdbus6 ... reconfigure` always exits 0 with no error - yet
-# the rendered window never changed, including after explicitly pinning
-# [org.kde.kdecoration2] library=org.kde.breeze (that specific key pair did not even
-# persist through a reconfigure). This pre-dates this change (the V2 goldens already
-# show it) and is not something this file introduces. The values below are the
-# correct, verified-real KDE keys and are safe to ship, but their visual effect needs
-# a follow-up investigation beyond config (most likely something in KWin's decoration
-# plugin loading, not a wrong key name) before it can be called done.
-[Windows]
-ButtonsOnLeft=IAX
-ButtonsOnRight=
-
+# ---- Resolved caveat (2026-10-20) ----
+# Earlier revisions reported that no key here changed the rendered titlebar. The cause
+# was the button layout written under [Windows], a group KWin does not read. With the
+# keys in [org.kde.kdecoration2] the screenshot harness shows close and minimize on the
+# left. The maximize button is absent in the harness because its window rules fix the
+# window size (inference from harness/vm/guest/skel/.config/kwinrulesrc, see
+# docs/SHELL_CONTRACT.md).
 [org.kde.kdecoration2]
+ButtonsOnLeft=XIA
+ButtonsOnRight=
 BorderSizeAuto=false
 
 [Windeco]

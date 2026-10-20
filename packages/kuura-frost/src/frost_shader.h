@@ -74,6 +74,16 @@ namespace Kuura
  *                     unscaled coordinates) would be WRONG at any output scale
  *                     other than 1.0, since this per-pixel math must match the
  *                     texture's own real pixel grid, not logical window size.
+ *   - `glassRect`     (x, y, width, height) of the window's blur-region
+ *                     bounding box, in device pixels with a TOP-LEFT origin,
+ *                     relative to Frost's captured texture (which spans the
+ *                     window's expanded geometry, shadow included). Set PER
+ *                     WINDOW, PER FRAME by Frost::apply() (bind/set/unbind via
+ *                     ShaderManager::pushShader()/popShader()). Edge distance,
+ *                     refraction, highlight and noise are all measured inside
+ *                     this rect; everything outside it is passed through
+ *                     unchanged. A zero-size rect (the GLSL default before the
+ *                     first upload) disables the material entirely.
  *   - `noiseSampler`, `noiseTextureSize`
  *                     Frost's OWN tiled grayscale noise texture (see frost.cpp's
  *                     m_noiseTexture) and its real pixel size, bound to texture
@@ -115,6 +125,7 @@ uniform sampler2D sampler;
 uniform vec4 modulation;
 uniform int textureWidth;
 uniform int textureHeight;
+uniform vec4 glassRect;
 uniform sampler2D noiseSampler;
 uniform vec2 noiseTextureSize;
 uniform float refractionStrength;
@@ -128,16 +139,39 @@ out vec4 fragColor;
 void main(void)
 {
     vec2 windowSize = vec2(float(textureWidth), float(textureHeight));
-    vec2 pixelPos = texcoord0 * windowSize;
+
+    // ---- 0. COORDINATE FRAME + GLASS RECT ----
+    // texcoord0 is GL's bottom-up texture space: OffscreenData::paint() runs the
+    // quad's top-left (0,0) texcoord through GLTexture::matrix(), which flips v
+    // for an FBO-allocated texture (v' = 1 - v), and the capture itself is
+    // rendered with the window's TOP at the texture's high-v rows. Converting to
+    // a top-left-origin pixel position here is what makes "top"/"left" below
+    // mean the window's real top/left edge on screen.
+    vec2 pixelPos = vec2(texcoord0.x, 1.0 - texcoord0.y) * windowSize;
+    vec4 base = texture(sampler, texcoord0);
+
+    // glassRect (x, y, width, height; device pixels, top-left origin, relative
+    // to this texture) is the bounding box of the window's blur region -- the
+    // area Blur actually frosts. The texture itself spans the window's whole
+    // EXPANDED geometry (shadow included), so measuring edges from the texture
+    // border would put the highlight on the outer edge of the shadow. Outside
+    // the rect (or before Frost has uploaded one), the window is passed
+    // through untouched.
+    vec2 local = pixelPos - glassRect.xy;
+    if (glassRect.z <= 0.0 || glassRect.w <= 0.0 || local.x < 0.0 || local.y < 0.0
+        || local.x > glassRect.z || local.y > glassRect.w) {
+        fragColor = base * modulation;
+        return;
+    }
 
     // ---- 1. EDGE DISTANCE (apply() docstring, point 1) ----
-    // Distance in pixels to each of the four edges; the nearest one's distance
-    // is edgeDist, and its outward-facing unit normal drives the refraction
-    // offset direction below.
-    float distLeft = pixelPos.x;
-    float distRight = windowSize.x - pixelPos.x;
-    float distTop = pixelPos.y;
-    float distBottom = windowSize.y - pixelPos.y;
+    // Distance in pixels to each of the glass rect's four edges; the nearest
+    // one's distance is edgeDist, and its outward-facing unit normal (top-left
+    // origin, so "up" is -y) drives the refraction offset direction below.
+    float distLeft = local.x;
+    float distRight = glassRect.z - local.x;
+    float distTop = local.y;
+    float distBottom = glassRect.w - local.y;
     float edgeDist = min(min(distLeft, distRight), min(distTop, distBottom));
 
     // WHY a plain if/else chain instead of a branchless "index of the minimum"
@@ -147,7 +181,7 @@ void main(void)
     // docstring itself enumerates. A tie (an exact corner pixel) picks whichever
     // branch is checked first; this only affects the refraction offset's
     // direction at a single-pixel corner case, never the highlight (point 3
-    // uses pixelPos directly, not this normal) or the falloff magnitude.
+    // uses the local position directly, not this normal) or the falloff.
     vec2 normal;
     if (edgeDist == distLeft) {
         normal = vec2(-1.0, 0.0);
@@ -162,40 +196,42 @@ void main(void)
     // ---- 2. EDGE REFRACTION (apply() docstring, point 2) ----
     // falloff is exactly 1.0 at the edge itself, linearly reaching 0.0 at
     // refractionEdgeFalloff pixels inward. max() with a tiny epsilon guards the
-    // division only against a pathological edge_falloff of exactly 0 (a
-    // degenerate token value outside today's real tokens.json, not a case the
-    // docstring's own formula needs to handle, but dividing by a real, non-zero
-    // token value is unaffected by it).
+    // division only against a degenerate edge_falloff token of exactly 0.
     float falloff = clamp(1.0 - edgeDist / max(refractionEdgeFalloff, 0.0001), 0.0, 1.0);
-    // strength reads as a FRACTION of the falloff distance (docstring's own
-    // worked example: strength=0.035, edge_falloff=12px -> ~0.42px maximum
-    // displacement right at the edge), hence the product below rather than
-    // strength alone.
+    // strength reads as a FRACTION of the falloff distance (strength=0.035,
+    // edge_falloff=12px -> ~0.42px maximum displacement right at the edge).
     vec2 offsetPixels = normal * (refractionStrength * refractionEdgeFalloff) * falloff;
-    // Convert the pixel offset to UV and clamp: sampling past the texture edge
-    // is undefined/wraps, not "no refraction" (docstring's own explicit call-out).
-    vec2 refractedUv = clamp(texcoord0 + offsetPixels / windowSize, 0.0, 1.0);
+    // WHY clamp to the glass rect inset by half a pixel (not to the texture's
+    // [0,1]): an outward offset at the glass edge would otherwise pull the
+    // shadow or a transparent corner texel into the glass, and the half-pixel
+    // inset keeps bilinear filtering from blending in the texel just outside.
+    vec2 sampleLocal = clamp(local + offsetPixels, vec2(0.5), max(glassRect.zw - vec2(0.5), vec2(0.5)));
+    vec2 samplePixel = glassRect.xy + sampleLocal;
+    vec2 refractedUv = vec2(samplePixel.x / windowSize.x, 1.0 - samplePixel.y / windowSize.y);
     vec4 refracted = texture(sampler, refractedUv);
 
     // ---- 3. SPECULAR EDGE HIGHLIGHT (apply() docstring, point 3) ----
-    // Fixed top-left light direction: only the top and left edges ever
-    // contribute. max(), NOT addition, so a pixel near the top-left CORNER
-    // (on both edges' falloff ranges at once) is not double-brightened.
-    float topStrength = clamp(1.0 - pixelPos.y / edgeHighlightWidth, 0.0, 1.0);
-    float leftStrength = clamp(1.0 - pixelPos.x / edgeHighlightWidth, 0.0, 1.0);
+    // Fixed top-left light direction: only the glass rect's top and left edges
+    // contribute. max(), NOT addition, so a pixel near the top-left CORNER is
+    // not double-brightened.
+    float topStrength = clamp(1.0 - local.y / edgeHighlightWidth, 0.0, 1.0);
+    float leftStrength = clamp(1.0 - local.x / edgeHighlightWidth, 0.0, 1.0);
     float highlight = max(topStrength, leftStrength);
-    vec3 highlighted = mix(refracted.rgb, vec3(1.0), highlight * edgeHighlightOpacity);
+    // WHY mix toward vec3(alpha) and not vec3(1.0): the captured texture is
+    // PREMULTIPLIED (OffscreenData::paint() blends with GL_ONE,
+    // GL_ONE_MINUS_SRC_ALPHA), so "white at this pixel's coverage" is
+    // (a, a, a). Mixing toward pure 1.0 would emit light where the window is
+    // transparent (a rounded corner inside the bounding rect), drawing a white
+    // line over Blur's backdrop where there is no glass at all.
+    vec3 highlighted = mix(refracted.rgb, vec3(refracted.a), highlight * edgeHighlightOpacity);
 
     // ---- 4. DITHER NOISE (apply() docstring, point 4) ----
     // Same tiled-noise-texture/gl_FragCoord sampling convention KWin's own
-    // blur/shaders/noise.frag uses (fetched and confirmed live, see this file's
-    // own header comment) -- adapted from that shader's SEPARATE additive blend
-    // PASS into a single inline addition here, because OffscreenData::paint()
-    // (the base class Frost cannot override) only issues ONE draw call with
-    // Frost's one bound shader; there is no second pass available to blend a
-    // noise-only draw onto, unlike Blur's own two-pass architecture.
+    // blur/shaders/noise.frag uses, applied inline because OffscreenData::paint()
+    // issues exactly one draw with this shader. Scaled by alpha for the same
+    // premultiplied-coverage reason as the highlight above.
     float noiseSample = texture(noiseSampler, gl_FragCoord.xy / noiseTextureSize).r;
-    vec3 withNoise = highlighted + vec3(noiseSample * noiseAmount);
+    vec3 withNoise = highlighted + vec3(noiseSample * noiseAmount * refracted.a);
 
     fragColor = vec4(withNoise, refracted.a) * modulation;
 }

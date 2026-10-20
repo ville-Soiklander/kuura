@@ -21,6 +21,7 @@ Rules (path -> constraint). "number" means int or float but never bool.
 - material.inner_shadow.opacity: 0..1; .blur: 0..50
 - material.refraction.strength: 0..0.5; .edge_falloff: 0..100
 - spacing.grid: int 1..16; spacing.gutter: int 0..64; spacing.section: int 0..128
+- stroke.hairline: number 0.5..4; stroke.focus: number 0.5..8
 - type.family_ui, type.family_mono: non-empty str
 - type.size.caption|body|title|header: int 8..72 and caption <= body <= title <= header
 - type.weight.regular|medium|semibold: int 100..900, multiple of 100, ascending
@@ -65,6 +66,7 @@ _RULES = {
     "material.inner_shadow.opacity": ("number", 0, 1), "material.inner_shadow.blur": ("number", 0, 50),
     "material.refraction.strength": ("number", 0, 0.5), "material.refraction.edge_falloff": ("number", 0, 100),
     "spacing.grid": ("int", 1, 16), "spacing.gutter": ("int", 0, 64), "spacing.section": ("int", 0, 128),
+    "stroke.hairline": ("number", 0.5, 4), "stroke.focus": ("number", 0.5, 8),
     "type.family_ui": ("str",), "type.family_mono": ("str",),
     "type.size.caption": ("int", 8, 72), "type.size.body": ("int", 8, 72),
     "type.size.title": ("int", 8, 72), "type.size.header": ("int", 8, 72),
@@ -114,6 +116,7 @@ _SECTIONS = {
     "icon": {"squircle_exponent", "gradient", "glass_edge"},
     "material": {"blur_radius", "noise", "bg_opacity", "edge_highlight", "inner_shadow", "refraction"},
     "spacing": {"grid", "gutter", "section"},
+    "stroke": {"hairline", "focus"},
     "type": {"family_ui", "family_mono", "size", "weight", "tracking"},
     "motion": {"duration", "easing_standard", "easing_spring"},
     "panel": {"menubar_height", "shelf_icon", "shelf_margin", "shelf_hover_scale"},
@@ -211,7 +214,7 @@ def validate(tokens: dict) -> list[str]:
         return ["tokens must be a dictionary"]
 
     # Validate non-color sections
-    for section in ["radius", "icon", "material", "spacing", "type", "motion", "panel"]:
+    for section in ["radius", "icon", "material", "spacing", "stroke", "type", "motion", "panel"]:
         if section not in tokens:
             errors.append(f"{section}: missing or not a dict")
             continue

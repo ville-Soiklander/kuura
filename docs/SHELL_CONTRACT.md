@@ -97,12 +97,38 @@ ruled out, with concrete evidence each time:
   materially deeper rabbit hole than the bounded investigation that was authorized, so it
   was stopped here rather than pursued further without checking back in.
 
-**Net effect on V3 scope:** the `skel/.config/kwinrc` button-placement/shortcut keys
-above are written correctly and DO persist, but cannot be verified to visibly change
-anything until this rendering gap is understood — button placement is moot if the
-decoration itself isn't the real Breeze one. Treat any new goldens captured before this
-is resolved as capturing the *generic* titlebar, not the project's intended chrome, and
-say so explicitly in the review rather than approving it as if it were correct.
+**Net effect on V3 scope (original text, superseded by the 2026-10-20 correction below):**
+the button-placement keys were believed to be written correctly and to persist, but
+unverifiable until this rendering gap was understood.
+
+### Correction 2026-10-20: the keys were in the wrong group, and the chrome is Breeze
+
+The claim above that the `kwinrc` button keys were "written correctly" was WRONG.
+`skel/.config/kwinrc` wrote `ButtonsOnLeft`/`ButtonsOnRight` under `[Windows]`, which
+KWin never reads. The schema itself (`kwindecorationsettings.kcfg`, read from the build
+image: `<kcfgfile name="kwinrc"/>`, `<group name="org.kde.kdecoration2">`, keys
+`ButtonsOnLeft` default `MSE`, `ButtonsOnRight` default `HIAX`) puts them in
+`[org.kde.kdecoration2]`. The investigation tested the wrong group, which is why every
+`kwriteconfig6` + `reconfigure` cycle showed no visual change.
+
+Fix (kuura-shell pkgrel 4): `[org.kde.kdecoration2]` now holds `ButtonsOnLeft=XIA`
+(close, minimize, maximize, left to right) and `ButtonsOnRight=` (empty); the dead
+`[Windows]` keys are gone. Covered by `tests/test_shell_skel_defaults.py`.
+
+Live verification (rebuilt repo and image, 6 window states in light and dark captured
+and compared with `--allow-missing`): the title bar of Dolphin and System Settings now
+shows the close X at the far left followed by the minimize chevron, centred title, and
+NOTHING on the right and no application icon (the old goldens had icon left, chevron
+and X right). So the layout config works.
+
+The "generic titlebar" Known issue was largely a misreading of the same decoration:
+Breeze draws minimize as a down chevron, so the old "icon, chevron, close" titlebar was
+Breeze showing menu, minimize and close. The maximize button is absent because the
+harness `kwinrulesrc` forces a fixed size for these windows (`harness/vm/guest/skel`),
+which hides it; this is an inference from the rule file, not separately proven. The
+decoration plugin was loading fine all along. The long list of ruled-out threads above
+is kept as history only. The project owner re-accepted all 24 goldens with the new layout
+(2026-10-20).
 
 ## Dark mode: Kvantum and GTK4/libadwaita (verified)
 
@@ -586,6 +612,33 @@ was not assumed either way):
 drive in this build. See `packages/kuura-shell/skel/.config/krunnerrc`'s own
 header comment for the complete evidence trail (exact commands, exact files
 scanned).
+
+**Frost (`packages/kuura-frost`) and KWin's Blur — chain order.** Frost adds
+the glass edge highlight, dither noise and a sub-pixel edge refraction to
+every window Blur blurs (same blur-region detection as Blur). It does NOT
+blur anything itself: Blur draws the frosted backdrop, Frost composites the
+window over it. This only works with Frost AFTER Blur in KWin's effect chain
+(`requestedEffectChainPosition()`: Blur 20, Frost 30, slidingpopups 40). An
+earlier Frost at position 10 replaced Blur's result with a SHARP backdrop on
+the first hardware-GL run (virgl, 2026-10-20): `OffscreenEffect::drawWindow()`
+never forwards a redirected window to the real render target, so Blur only
+ever ran inside Frost's capture, against Frost's freshly cleared transparent
+FBO. Frost no longer sets `WindowForceBlurRole`. Edges are measured from the
+blur region's bounding box (the capture texture includes the shadow), the
+highlight sits on the top/left edges, and highlight/noise are scaled by the
+window's premultiplied alpha. Known limitation: the refraction displaces the
+window's own translucent content, not the blurred backdrop (backdrop
+refraction would need a different kind of effect). Full trace in
+`packages/kuura-frost/src/frost.h`.
+
+Frost is shipped: `kuura-desktop` depends on `kuura-frost`, and the plugin is
+enabled by default through its own `metadata.json` (`EnabledByDefault`), so no
+`kwinrc` entry is required. Material values (requirement change 2026-10-20,
+the first live measurement showed the old values added only about +2 of 255
+levels on a near-white surface): `material.edge_highlight` opacity 0.55 /
+width 1.5 px and `material.noise` 0.03, so the glass rim is visible but not a
+white border. The package's `check()` runs the headless shader test
+(`tests/offscreen_shader_test.cpp`, Mesa llvmpipe, surfaceless EGL).
 
 **Scope item 5 (Overview effect spacing/animation), closed the same way —
 already done, documented at the implementation site rather than here.**
