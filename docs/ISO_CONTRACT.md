@@ -201,6 +201,20 @@ for what Calamares ships generically); `settings.conf.in`'s own header
 comment is the authoritative record of the one line actually commented out
 in the shipped file.
 
+**REVISED 2026-10-20** (first UEFI install ever driven to the end; root cause
+read from Calamares' own session log, which `harness/install/run.py` now
+pulls from the live guest whenever Calamares shows "Installation Failed"):
+`modules/bootloader.conf` sets `efiBootloaderId: "@NAME@"` (substituted with
+`DISTRO_NAME` by the PKGBUILD, like `settings.conf.in`). Calamares' bootloader
+module takes the EFI directory name from that key and otherwise from
+`branding.desc`'s `bootloaderEntryName`, which this project's branding does
+not set; the result was `grub-install --bootloader-id=` (empty), GRUB placed
+directly in `EFI/`, and the `installEFIFallback` copy of
+`EFI/<id>/grubx64.efi` raising `FileNotFoundError` ("Bad main script file").
+BIOS installs never read the id, which is why only UEFI failed. Loader choice
+(`grub`), the fallback copy and the partition layout are unchanged. Pinned
+by `tests/test_installer_bootloader.py`.
+
 ## Live-only cleanup (locked 2026-10-12 — real, confirmed install-blocking findings)
 
 `unpackfs` copies the **entire live rootfs verbatim** onto the target disk —

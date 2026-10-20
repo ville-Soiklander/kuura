@@ -11,6 +11,7 @@ harness/tests/test_install_boot.py and the existing harness/shots/vm.py tests.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,11 @@ from harness.install.wizard import (
     _SDDM_PASSWORD_FIELD,
     WizardCredentials,
     WizardError,
+    InstallFailedError,
     _click_install_and_confirm,
+    _click_next_and_confirm,
+    _find_install_button,
+    _install_failed_dialog_visible,
     _highlighted_row_y,
     _looks_like_desktop,
     _page_at,
@@ -29,7 +34,7 @@ from harness.install.wizard import (
     _settle_screen,
     _type_mixed,
 )
-from harness.shots.pngio import write_png
+from harness.shots.pngio import read_png, write_png
 
 DARK = (21, 24, 28)
 HIGHLIGHT = (79, 179, 200)
@@ -263,6 +268,45 @@ def test_highlighted_row_y_ignores_a_highlight_before_the_scan_start(tmp_path: P
     assert _highlighted_row_y(path) is None
 
 
+def _paint_rows(path: Path, width: int, height: int, bands: list[tuple[int, int]]) -> None:
+    """Build a dark PNG with HIGHLIGHT painted on every inclusive (y0, y1) band in `bands`."""
+    pixels = bytearray(width * height * 3)
+    for y in range(height):
+        color = HIGHLIGHT if any(y0 <= y <= y1 for y0, y1 in bands) else DARK
+        pixels[y * width * 3 : (y + 1) * width * 3] = bytes(color) * width
+    write_png(path, width, height, bytes(pixels))
+
+
+def test_highlighted_row_y_ignores_wallpaper_specks_on_a_desktop_frame(tmp_path: Path) -> None:
+    """
+    REGRESSION TEST (live failure, 2026-10-20): the new desktop wallpaper has a
+    few pixels at x=_SIDEBAR_X within tolerance of the highlight colour (runs
+    measured on a real desktop screendump: y=800..800, 861..861, 920..924). The
+    Calamares-launch calibration accepted such a desktop frame as "Welcome
+    highlighted at y=800", so every later page (Location at y=417) mapped to a
+    negative row index and was judged None. Runs far shorter than a sidebar row
+    are not a highlight.
+    """
+    path = tmp_path / "desktop.png"
+    _paint_rows(path, 700, 1080, [(800, 800), (861, 861), (920, 924)])
+    assert _highlighted_row_y(path) is None
+
+
+def test_highlighted_row_y_skips_short_runs_before_the_real_row(tmp_path: Path) -> None:
+    """A wallpaper speck above the real 39-row band must not hide the band (Location: rows 398..436)."""
+    path = tmp_path / "location.png"
+    _paint_rows(path, 700, 1080, [(320, 322), (398, 436), (862, 862), (920, 924)])
+    assert _highlighted_row_y(path) == 417
+
+
+@pytest.mark.parametrize(("rows", "found"), [(29, False), (30, True), (48, True), (49, False)])
+def test_highlighted_row_y_run_height_bounds(tmp_path: Path, rows: int, found: bool) -> None:
+    """A run counts as the highlight only if its height is within the accepted row-height bounds."""
+    path = tmp_path / f"band-{rows}.png"
+    _paint_rows(path, 700, 900, [(400, 400 + rows - 1)])
+    assert (_highlighted_row_y(path) is not None) is found
+
+
 def test_page_at_maps_offsets_to_the_right_named_page(tmp_path: Path) -> None:
     """Welcome (index 0) through finish (index 7), each 39px apart from a measured anchor, resolve by name."""
     anchor = 350
@@ -319,9 +363,81 @@ def test_sddm_password_field_coordinate_is_within_full_hd() -> None:
     assert 0 <= y < 1080
 
 
-# --- _click_install_and_confirm -----------------------------------------------------------
+# --- _find_install_button / _click_install_and_confirm -------------------------------------
 
 _ANCHOR = 350
+_BORDER = (171, 171, 171)
+
+
+def _paint(pixels: bytearray, width: int, x0: int, x1: int, y: int, colour: tuple[int, int, int]) -> None:
+    """Paint the horizontal run x0..x1-1 on row y of a packed RGB buffer."""
+    pixels[(y * width + x0) * 3 : (y * width + x1) * 3] = bytes(colour) * (x1 - x0)
+
+
+def make_summary_png(path: Path, button_top: int | None, width: int = 1400, height: int = 1000) -> None:
+    """
+    Build a synthetic Summary-page frame: light background, the sidebar highlight
+    on the Summary row and, if `button_top` is given, a 25-row-tall Install button
+    (grey 1px border rows at button_top and button_top + 24, x 1291..1364).
+
+    Args:
+        path: Where to write the PNG.
+        button_top: y of the button's top border row, or None for no button.
+        width: Image width (must exceed the scan column, 1300).
+        height: Image height; varying it makes otherwise equal frames differ.
+    """
+    center = _ANCHOR + 5 * 39
+    pixels = bytearray(bytes((250, 250, 250)) * (width * height))
+    for y in range(center - 19, center + 20):
+        _paint(pixels, width, 440, 480, y, HIGHLIGHT)
+    if button_top is not None:
+        for y in (button_top, button_top + 24):
+            _paint(pixels, width, 1291, 1365, y, _BORDER)
+    write_png(path, width, height, bytes(pixels))
+
+
+@pytest.mark.parametrize(("top", "centre"), [(864, 876), (881, 893)])
+def test_find_install_button_locates_the_centre_on_bios_and_uefi_geometry(tmp_path: Path, top: int, centre: int) -> None:
+    """REGRESSION: the button sits at centre 876 (BIOS) or 893 (UEFI); both are found."""
+    frame = tmp_path / "summary.png"
+    make_summary_png(frame, button_top=top)
+    assert _find_install_button(frame) == (1333, centre)
+
+
+def test_find_install_button_returns_none_when_absent(tmp_path: Path) -> None:
+    """No border pair in the scan column means None: the caller must not click blind."""
+    frame = tmp_path / "summary.png"
+    make_summary_png(frame, button_top=None)
+    assert _find_install_button(frame) is None
+
+
+def test_find_install_button_ignores_a_lone_border_and_a_too_thin_pair(tmp_path: Path) -> None:
+    """One grey row, or two grey rows only 10 apart (e.g. a text-field edge), is not a button."""
+    frame = tmp_path / "summary.png"
+    make_summary_png(frame, button_top=864)
+    width, height, rgb = read_png(frame)
+    pixels = bytearray(rgb)
+    _paint(pixels, width, 1291, 1365, 888, (250, 250, 250))  # erase the bottom border
+    _paint(pixels, width, 1291, 1365, 874, _BORDER)  # grey row only 10 below the top one
+    write_png(frame, width, height, bytes(pixels))
+    assert _find_install_button(frame) is None
+
+
+def test_find_install_button_returns_none_on_a_frame_narrower_than_the_scan_column(tmp_path: Path) -> None:
+    """A frame too small to contain the scan column yields None, not an IndexError."""
+    frame = tmp_path / "small.png"
+    make_sidebar_png(frame, width=700, height=900, highlight_rows=None)
+    assert _find_install_button(frame) is None
+
+
+def test_install_click_without_a_button_raises_and_never_clicks(tmp_path: Path) -> None:
+    """If the button cannot be located the click is refused with a clear WizardError."""
+    screen = FakeInstallScreen(tmp_path, lost_clicks=0, button_top=None)
+    with pytest.raises(WizardError, match="Install button"):
+        _click_install_and_confirm(
+            screen, tmp_path, _ANCHOR, _summary_frame(screen, tmp_path), wait_s=0.5, guard_s=0.0
+        )
+    assert screen.clicks == 0
 
 
 class FakeInstallScreen:
@@ -332,8 +448,12 @@ class FakeInstallScreen:
     pointer-redraw change), later ones switch to the Install page.
     """
 
-    def __init__(self, tmp_path: Path, lost_clicks: int, accept: bool = True) -> None:
+    def __init__(
+        self, tmp_path: Path, lost_clicks: int, accept: bool = True, button_top: int | None = 881
+    ) -> None:
         self.clicks = 0
+        self.click_points: list[tuple[int, int]] = []
+        self._button_top = button_top
         self._lost = lost_clicks
         self._accept = accept
         self._tmp = tmp_path
@@ -344,11 +464,15 @@ class FakeInstallScreen:
     def _page_bytes(self, name: str, variant: int) -> bytes:
         center = _ANCHOR + _PAGE_ORDER.index(name) * 39
         path = self._tmp / f"fake-{name}-{variant}.png"
-        make_sidebar_png(path, width=700, height=900 + variant, highlight_rows=(center - 19, center + 19))
+        if name == "summary":
+            make_summary_png(path, self._button_top, height=1000 + variant)
+        else:
+            make_sidebar_png(path, width=1400, height=1000 + variant, highlight_rows=(center - 19, center + 19))
         return path.read_bytes()
 
     def pointer_click(self, x: int, y: int) -> None:
         self.clicks += 1
+        self.click_points.append((x, y))
         self._noise += 1  # an unrelated change (pointer redraw) follows every click
 
     def screendump(self, path: Path) -> None:
@@ -375,6 +499,7 @@ def test_install_click_succeeds_first_time(tmp_path: Path) -> None:
     )
     assert _page_at(frame, _ANCHOR) == "install"
     assert screen.clicks == 1
+    assert screen.click_points == [(1333, 893)]  # UEFI geometry: centre of 881..905
 
 
 def test_install_click_lost_once_is_retried_and_succeeds(tmp_path: Path) -> None:
@@ -398,3 +523,211 @@ def test_install_click_never_taking_effect_fails_fast_after_bounded_attempts(tmp
             screen, tmp_path, _ANCHOR, _summary_frame(screen, tmp_path), attempts=3, wait_s=0.6, guard_s=0.0
         )
     assert screen.clicks == 3
+
+
+# --- _click_next_and_confirm ---------------------------------------------------------------
+
+
+class FakeNextScreen:
+    """
+    Screen showing the Welcome page until the Location page "renders".
+
+    The page change needs `accepted_clicks` clicks to have happened and then
+    `render_delay_s` seconds to have passed since the accepting click, modelling
+    both a click Calamares ignored (requirements check still running) and a slow
+    render. `never` keeps the screen on Welcome forever.
+    """
+
+    def __init__(self, tmp_path: Path, ignored_clicks: int = 0, render_delay_s: float = 0.0, never: bool = False) -> None:
+        self.clicks = 0
+        self._ignored = ignored_clicks
+        self._delay = render_delay_s
+        self._never = never
+        self._accepted_at: float | None = None
+        self._noise = 0
+        self._tmp = tmp_path
+
+    def _page_bytes(self, name: str, variant: int) -> bytes:
+        center = _ANCHOR + _PAGE_ORDER.index(name) * 39
+        path = self._tmp / f"next-{name}-{variant}.png"
+        make_sidebar_png(path, width=700, height=900 + variant, highlight_rows=(center - 19, center + 19))
+        return path.read_bytes()
+
+    def pointer_click(self, x: int, y: int) -> None:
+        self.clicks += 1
+        self._noise += 1
+        if self.clicks > self._ignored and self._accepted_at is None and not self._never:
+            self._accepted_at = time.monotonic()
+
+    def screendump(self, path: Path) -> None:
+        if self._accepted_at is not None and time.monotonic() - self._accepted_at >= self._delay:
+            path.write_bytes(self._page_bytes("location", 0))
+        else:
+            path.write_bytes(self._page_bytes("welcome", self._noise))
+
+
+def _welcome_frame(screen: FakeNextScreen, tmp_path: Path) -> Path:
+    """Write the screen's initial Welcome frame and return its path."""
+    frame = tmp_path / "welcome-start.png"
+    frame.write_bytes(screen._page_bytes("welcome", 0))
+    return frame
+
+
+def test_next_click_ignored_once_is_retried_and_succeeds(tmp_path: Path) -> None:
+    """REGRESSION: a Next click dropped while Calamares is busy is repeated, not waited on forever."""
+    screen = FakeNextScreen(tmp_path, ignored_clicks=1)
+    frame = _click_next_and_confirm(
+        screen, tmp_path, _ANCHOR, _welcome_frame(screen, tmp_path), "location", wait_s=1.5, guard_s=0.0
+    )
+    assert _page_at(frame, _ANCHOR) == "location"
+    assert screen.clicks == 2
+
+
+def test_next_page_appearing_after_the_first_wait_is_still_accepted(tmp_path: Path) -> None:
+    """REGRESSION: a page that renders after the old single wait (30 s there, 1.5 s here) is accepted."""
+    screen = FakeNextScreen(tmp_path, render_delay_s=1.6)
+    frame = _click_next_and_confirm(
+        screen, tmp_path, _ANCHOR, _welcome_frame(screen, tmp_path), "location", wait_s=1.0, guard_s=0.0, attempts=3
+    )
+    assert _page_at(frame, _ANCHOR) == "location"
+
+
+def test_next_click_never_changing_the_page_fails_after_bounded_attempts(tmp_path: Path) -> None:
+    """A page that never changes raises a clear WizardError after exactly `attempts` clicks."""
+    screen = FakeNextScreen(tmp_path, never=True)
+    with pytest.raises(WizardError, match="expected the 'location' page.*3 Next clicks"):
+        _click_next_and_confirm(
+            screen, tmp_path, _ANCHOR, _welcome_frame(screen, tmp_path), "location", attempts=3, wait_s=0.6, guard_s=0.0
+        )
+    assert screen.clicks == 3
+
+
+class ScriptedNextScreen:
+    """
+    Screen replaying scripted frames: after a click, the n-th dump shows
+    `after[n]` (the last entry repeats forever); a None entry is a transitional
+    repaint with no recognisable sidebar. Before any click it shows `before`.
+    """
+
+    def __init__(self, tmp_path: Path, before: str, after: list[str | None]) -> None:
+        self.clicks = 0
+        self._tmp = tmp_path
+        self._before = before
+        self._after = after
+        self._dumps_since_click = 0
+
+    def _bytes(self, name: str | None, variant: int = 0) -> bytes:
+        path = self._tmp / f"scripted-{name}-{variant}.png"
+        if name is None:
+            make_sidebar_png(path, width=700, height=900 + variant, highlight_rows=None)
+        else:
+            center = _ANCHOR + _PAGE_ORDER.index(name) * 39
+            make_sidebar_png(path, width=700, height=900 + variant, highlight_rows=(center - 19, center + 19))
+        return path.read_bytes()
+
+    def pointer_click(self, x: int, y: int) -> None:
+        self.clicks += 1
+        self._dumps_since_click = 0
+
+    def screendump(self, path: Path) -> None:
+        if self.clicks == 0:
+            path.write_bytes(self._bytes(self._before))
+            return
+        index = min(self._dumps_since_click, len(self._after) - 1)
+        self._dumps_since_click += 1
+        # Variant is fixed per script index so a static tail yields identical bytes.
+        path.write_bytes(self._bytes(self._after[index], variant=index + 1))
+
+
+def _scripted_start(screen: ScriptedNextScreen, tmp_path: Path) -> Path:
+    """Write the scripted screen's pre-click frame and return its path."""
+    frame = tmp_path / "scripted-start.png"
+    frame.write_bytes(screen._bytes(screen._before))
+    return frame
+
+
+def test_next_transitional_unrecognised_frame_then_static_expected_page_needs_one_click(tmp_path: Path) -> None:
+    """
+    REGRESSION: the first changed frame after an accepted click was an unrecognised
+    transitional repaint; the screen then stayed on the expected page, the poll saw
+    no change and the old code re-clicked Next, skipping a page.
+    """
+    screen = ScriptedNextScreen(tmp_path, "welcome", [None, "location"])
+    frame = _click_next_and_confirm(
+        screen, tmp_path, _ANCHOR, _scripted_start(screen, tmp_path), "location", wait_s=1.5, guard_s=0.0, attempts=3
+    )
+    assert _page_at(frame, _ANCHOR) == "location"
+    assert screen.clicks == 1
+
+
+def test_next_static_later_page_is_reported_as_overshoot_without_another_click(tmp_path: Path) -> None:
+    """A page AFTER the expected one raises 'overshot' immediately; no further Next click is made."""
+    screen = ScriptedNextScreen(tmp_path, "welcome", [None, "partitions"])
+    with pytest.raises(WizardError, match="overshot"):
+        _click_next_and_confirm(
+            screen, tmp_path, _ANCHOR, _scripted_start(screen, tmp_path), "location", wait_s=1.5, guard_s=0.0, attempts=3
+        )
+    assert screen.clicks == 1
+
+
+def test_next_overshoot_on_the_first_frame_after_the_click_stops_at_one_click(tmp_path: Path) -> None:
+    """The later page is already showing on the first dump after the click: overshoot, one click."""
+    screen = ScriptedNextScreen(tmp_path, "welcome", ["keyboard"])
+    with pytest.raises(WizardError, match="overshot"):
+        _click_next_and_confirm(
+            screen, tmp_path, _ANCHOR, _scripted_start(screen, tmp_path), "location", wait_s=1.0, guard_s=0.0, attempts=3
+        )
+    assert screen.clicks == 1
+
+
+# --- Installation Failed dialog -----------------------------------------------------------
+
+
+def _finish_frame(tmp_path: Path, with_error_dialog: bool, page: str = "finish") -> Path:
+    """Build a 1920x1080 frame with `page` highlighted, optionally with a white box where the error details sit."""
+    width, height = 1920, 1080
+    center = _ANCHOR + _PAGE_ORDER.index(page) * 39
+    pixels = bytearray(bytes((239, 239, 239)) * (width * height))
+    for y in range(center - 19, center + 20):
+        pixels[(y * width + 450) * 3 : (y * width + 470) * 3] = bytes(HIGHLIGHT) * 20
+    if with_error_dialog:
+        for y in range(458, 579):
+            pixels[(y * width + 765) * 3 : (y * width + 1149) * 3] = bytes((255, 255, 255)) * (1149 - 765)
+    path = tmp_path / f"{page}-{'error' if with_error_dialog else 'ok'}.png"
+    write_png(path, width, height, bytes(pixels))
+    return path
+
+
+def test_error_dialog_is_recognised_over_the_finish_page(tmp_path: Path) -> None:
+    """The failure dialog keeps Finish highlighted, so it must be detected separately from the sidebar."""
+    frame = _finish_frame(tmp_path, with_error_dialog=True)
+    assert _page_at(frame, _ANCHOR) == "finish"
+    assert _install_failed_dialog_visible(frame, _ANCHOR) is True
+
+
+def test_clean_finish_page_is_not_flagged_as_failed(tmp_path: Path) -> None:
+    """A successful Finish page (grey background) is not mistaken for the error dialog."""
+    assert _install_failed_dialog_visible(_finish_frame(tmp_path, with_error_dialog=False), _ANCHOR) is False
+
+
+def test_white_install_page_is_not_flagged_as_failed(tmp_path: Path) -> None:
+    """
+    REGRESSION: the running Install page has a large white slideshow area under the
+    probe points; a live BIOS install at 10 % was reported as "Installation Failed".
+    Only a Finish page can carry the failure dialog.
+    """
+    frame = _finish_frame(tmp_path, with_error_dialog=True, page="install")
+    assert _page_at(frame, _ANCHOR) == "install"
+    assert _install_failed_dialog_visible(frame, _ANCHOR) is False
+
+
+def test_error_dialog_check_tolerates_a_small_frame(tmp_path: Path) -> None:
+    """A frame smaller than the probe points is simply 'no dialog', never an exception."""
+    path = tmp_path / "small.png"
+    make_sidebar_png(path, width=700, height=900, highlight_rows=None)
+    assert _install_failed_dialog_visible(path, _ANCHOR) is False
+
+
+def test_install_failed_error_is_a_wizard_error() -> None:
+    """Callers catching WizardError keep working; the subclass carries the specific message."""
+    assert issubclass(InstallFailedError, WizardError)

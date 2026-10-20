@@ -130,7 +130,21 @@ _USERNAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 #: y=780); the Summary page's own longer content grows the window, so its button
 #: row sits lower (y=876). Re-verified live immediately before being encoded here.
 _NEXT_BUTTON = (1328, 780)
-_INSTALL_BUTTON = (1333, 876)
+#: The Install button's vertical position is NOT fixed: the Summary page grows
+#: with the number of partition lines it lists, so the button centre measured
+#: y=876 on BIOS (864..888) but y=893 on UEFI (881..905, extra EFI partition line).
+#: It is therefore located on the actual frame (_find_install_button) by scanning
+#: the column _INSTALL_BUTTON_SCAN_X, which lies inside the Install button
+#: (x 1291..1364 at 1920x1080) and clear of Back (1205..1278), Cancel
+#: (1389..1462) and the button label text (around x=1333).
+_INSTALL_BUTTON_X = 1333
+_INSTALL_BUTTON_SCAN_X = 1300
+_INSTALL_BUTTON_SCAN_Y = (820, 960)
+#: The button's 1px border is a neutral grey, RGB (171, 171, 171) measured on
+#: both layouts; the button is 25 rows tall including both border rows.
+_INSTALL_BORDER_RGB = 171
+_INSTALL_BORDER_TOLERANCE = 6
+_INSTALL_BUTTON_HEIGHT = (20, 30)
 _ERASE_DISK_RADIO = (655, 349)
 _FULL_NAME_FIELD = (746, 329)
 _USERNAME_FIELD = (746, 389)
@@ -166,6 +180,17 @@ _PAGE_NAMES = ("welcome", "location", "keyboard", "partitions", "users", "summar
 #: the first real row) removes the false match without narrowing the real one.
 _SIDEBAR_SCAN_Y_START = 300
 
+#: Accepted height (inclusive, physical rows) of a highlight run. The real
+#: highlighted row is 39 rows tall (y=359..397 Welcome, 398..436 Location on real
+#: screendumps). REQUIRED, not cosmetic: confirmed live 2026-10-20 that the new
+#: desktop wallpaper has isolated pixels at x=_SIDEBAR_X within tolerance of the
+#: highlight colour (runs y=800..800, 861..861 and 920..924 on a real desktop
+#: frame). The Calamares-launch calibration accepted such a still-desktop frame
+#: as "Welcome highlighted at y=800", after which the real Location row (y=417)
+#: mapped to row index -10 and every page was judged None. Bounds are wide enough
+#: for a one-pixel rounding change of the row and far from wallpaper specks.
+_SIDEBAR_RUN_HEIGHT = (30, 48)
+
 #: Upper bound on how long the real install (unpackfs + shellprocess + packages +
 #: bootloader, ...) may run before this is treated as a hang rather than real,
 #: still-progressing work - generous (this project's own measured real installs
@@ -185,6 +210,24 @@ _ACTION_SETTLE_GUARD_S = 0.3
 #: instead of a 2400 s wait on a Summary page that never started installing.
 _INSTALL_CLICK_ATTEMPTS = 3
 _INSTALL_CLICK_WAIT_S = 20.0
+
+#: Page-advance confirmation (see _click_next_and_confirm): a Next click can be
+#: ignored while Calamares is still busy (Welcome's requirements check on a
+#: loaded host leaves Next disabled), and a page can render tens of seconds after
+#: an accepted click. Bounded retries (attempts x wait = 180 s total) tolerate both
+#: without ever waiting forever. 180 s, not 90 s: on a host busy with a package
+#: build the Location page (timezone map) appeared only after 90 s in a live run.
+_PAGE_CLICK_ATTEMPTS = 3
+_PAGE_WAIT_S = 60.0
+
+#: Calamares' modal "Error" dialog ("Installation Failed") is drawn OVER the Finish
+#: page, so the sidebar still highlights Finish and _page_at alone reports success.
+#: Signal, measured against a real failed install's screenshot: the dialog's
+#: details box is pure white (255,255,255) while the Finish page background is
+#: (239,239,239) at the same spots. All probes must be white, so a stray bright
+#: pixel cannot false-positive. Points are inside the box at 1920x1080.
+_ERROR_DIALOG_PROBES = ((780, 480), (950, 540), (1130, 570), (780, 565), (1130, 480))
+_ERROR_DIALOG_MIN_CHANNEL = 250
 
 #: SDDM greeter's password field + "Log In" button, Breeze theme at 1920x1080 -
 #: measured directly against a real post-install boot this phase (same "measured,
@@ -310,6 +353,10 @@ class WizardError(RuntimeError):
     Calamares did not reach Finish: a page's own expected element never appeared or
     settled within its own timeout, or the QMP connection was lost mid-install.
     """
+
+
+class InstallFailedError(WizardError):
+    """Calamares showed its "Installation Failed" error dialog over the Finish page."""
 
 
 @dataclass(frozen=True)
@@ -522,32 +569,43 @@ def _highlighted_row_y(frame: Path) -> int | None:
         frame: A PNG screenshot of the full 1920x1080 screen.
 
     Returns:
-        The physical-pixel y coordinate of the first (and normally only)
-        contiguous run of rows at x=_SIDEBAR_X whose colour matches
-        _SIDEBAR_HIGHLIGHT_RGB within _SIDEBAR_COLOR_TOLERANCE, or None if no such
-        run exists (the Calamares window is not on screen, or is not at its
-        expected horizontal position). The scan deliberately starts at
-        _SIDEBAR_SCAN_Y_START, not 0 - see that constant's own docstring for the
-        real, confirmed false-match this skips (the product icon above the page
-        list).
+        The physical-pixel y coordinate of the centre of the first contiguous run
+        of rows at x=_SIDEBAR_X whose colour matches _SIDEBAR_HIGHLIGHT_RGB within
+        _SIDEBAR_COLOR_TOLERANCE AND whose height is within _SIDEBAR_RUN_HEIGHT,
+        or None if no such run exists (the Calamares window is not on screen, or
+        is not at its expected horizontal position). The scan deliberately starts
+        at _SIDEBAR_SCAN_Y_START, not 0 - see that constant's own docstring for
+        the real, confirmed false-match this skips (the product icon above the
+        page list); runs of the wrong height (wallpaper specks) are skipped, see
+        _SIDEBAR_RUN_HEIGHT.
     """
     width, height, rgb = read_png(frame)
     if _SIDEBAR_X >= width or _SIDEBAR_SCAN_Y_START >= height:
         return None
+    min_rows, max_rows = _SIDEBAR_RUN_HEIGHT
     start: int | None = None
-    for y in range(_SIDEBAR_SCAN_Y_START, height):
-        offset = (y * width + _SIDEBAR_X) * 3
-        r, g, b = rgb[offset], rgb[offset + 1], rgb[offset + 2]
-        match = (
-            abs(r - _SIDEBAR_HIGHLIGHT_RGB[0]) <= _SIDEBAR_COLOR_TOLERANCE
-            and abs(g - _SIDEBAR_HIGHLIGHT_RGB[1]) <= _SIDEBAR_COLOR_TOLERANCE
-            and abs(b - _SIDEBAR_HIGHLIGHT_RGB[2]) <= _SIDEBAR_COLOR_TOLERANCE
-        )
+    # One extra iteration past the last row (y == height) closes a run that
+    # touches the bottom edge through the same height check as any other run.
+    for y in range(_SIDEBAR_SCAN_Y_START, height + 1):
+        match = False
+        if y < height:
+            offset = (y * width + _SIDEBAR_X) * 3
+            r, g, b = rgb[offset], rgb[offset + 1], rgb[offset + 2]
+            match = (
+                abs(r - _SIDEBAR_HIGHLIGHT_RGB[0]) <= _SIDEBAR_COLOR_TOLERANCE
+                and abs(g - _SIDEBAR_HIGHLIGHT_RGB[1]) <= _SIDEBAR_COLOR_TOLERANCE
+                and abs(b - _SIDEBAR_HIGHLIGHT_RGB[2]) <= _SIDEBAR_COLOR_TOLERANCE
+            )
         if match and start is None:
             start = y
         elif not match and start is not None:
-            return (start + y - 1) // 2
-    return None if start is None else (start + height - 1) // 2
+            # Only a run of real sidebar-row height is the highlight; anything
+            # shorter or taller is unrelated content of a similar colour, so keep
+            # scanning instead of giving up on the frame.
+            if min_rows <= y - start <= max_rows:
+                return (start + y - 1) // 2
+            start = None
+    return None
 
 
 def _looks_like_desktop(frame: Path) -> bool:
@@ -671,6 +729,73 @@ def _install_root_file(agent: Any, data: bytes, dest: str, mode: int, label: str
         raise WizardError(f"could not install test-only system file {label!r}") from exc
     if placed.exit_code != 0:
         raise WizardError(f"installing test-only system file {label!r} failed (exit {placed.exit_code})")
+
+
+#: Upper bound on how much of each diagnostic log is copied out of the guest. The
+#: agent returns captured output base64-encoded in one JSON line; a bound keeps one
+#: runaway log from turning a diagnostic step into a memory problem.
+_FAILURE_LOG_MAX_BYTES = 4_000_000
+
+#: (file name under the firmware output directory, guest command) for every log
+#: pulled after Calamares reports "Installation Failed". Calamares runs as root via
+#: pkexec, so its session log lives in root's cache directory; the journal tail
+#: adds the kernel/udev/mount context Calamares' own log does not contain.
+#: ``journalctl -n`` is used instead of a ``| tail`` pipe: commands never go
+#: through a shell.
+FAILURE_LOGS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "calamares-session.log",
+        ("/usr/bin/tail", "-c", str(_FAILURE_LOG_MAX_BYTES), "--", "/root/.cache/calamares/session.log"),
+    ),
+    ("journal-tail.log", ("/usr/bin/journalctl", "-b", "--no-pager", "-n", "400")),
+)
+
+
+def collect_install_failure_logs(
+    agent: Any,
+    dest_dir: Path,
+    log: Callable[[str], None] = lambda line: None,
+) -> list[Path]:
+    """
+    Copy the installer's own logs out of a live guest whose install just failed.
+
+    Best effort by design: this runs only on a path that is already a failure, so
+    a missing log or an unreachable agent is logged and skipped - it must never
+    replace the real InstallFailedError with a diagnostics error.
+
+    Args:
+        agent: A connected guest agent of the still-running live session (only its
+            ``exec`` method is used; runs as root).
+        dest_dir: Directory that receives the files (created if missing), normally
+            ``<out>/<firmware>``.
+        log: Progress callback, one line per log.
+
+    Returns:
+        The files actually written, in FAILURE_LOGS order (empty when none could be
+        pulled).
+    """
+    written: list[Path] = []
+    for name, argv in FAILURE_LOGS:
+        try:
+            result = agent.exec(list(argv), timeout=60.0)
+        except (TimeoutError, ConnectionError, RuntimeError, OSError, ValueError) as exc:
+            log(f"install failure: could not pull {name}: {exc}")
+            continue
+        if result.exit_code != 0 or not result.stdout:
+            # The stderr text is the guest program's own short message (e.g. "No such
+            # file"), useful for telling "log missing" apart from "agent broken".
+            log(f"install failure: {name} unavailable (exit {result.exit_code}): {result.stderr.strip()[:200]}")
+            continue
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            target = dest_dir / name
+            target.write_text(result.stdout, encoding="utf-8")
+        except OSError as exc:
+            log(f"install failure: could not save {name}: {exc}")
+            continue
+        written.append(target)
+        log(f"install failure: saved {name}")
+    return written
 
 
 def _list_skel_files(skel_dir: Path, what: str = "skeleton") -> list[str]:
@@ -1013,7 +1138,7 @@ def log_into_sddm(
         shot("sddm-password-entered")
         # A real click on the measured "Log In" button, not Enter: the same
         # "click the real element, do not assume a keyboard shortcut" preference
-        # this module's own _NEXT_BUTTON/_INSTALL_BUTTON clicks already follow for
+        # this module's own _NEXT_BUTTON click and the located Install button click already follow for
         # Calamares, now that a real coordinate for this button has been measured
         # too (see _SDDM_LOGIN_BUTTON's own comment) - one fewer assumption on a
         # screen this module has not driven before.
@@ -1039,6 +1164,185 @@ def log_into_sddm(
         raise WizardError(f"could not log into SDDM: {exc}") from exc
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _install_failed_dialog_visible(frame: Path, anchor_y: int) -> bool:
+    """
+    Check whether Calamares' modal "Installation Failed" error dialog is on screen.
+
+    WHY: the dialog is drawn over the Finish page, so the sidebar highlight alone
+    (_page_at == "finish") cannot tell a failed install from a successful one.
+    WHY only on Finish: the running Install page has a large white slideshow area
+    under the same probe points (a live install at 10 % was misreported as failed),
+    and Calamares switches to Finish when a job fails.
+
+    Args:
+        frame: A PNG screenshot of the full screen.
+        anchor_y: Sidebar calibration (see _page_at).
+
+    Returns:
+        True if the sidebar shows Finish and every probe point in
+        _ERROR_DIALOG_PROBES is white (the dialog's details box). False for any
+        other frame, including frames too small to contain the probe points.
+    """
+    if _page_at(frame, anchor_y) != "finish":
+        return False
+    width, height, rgb = read_png(frame)
+    for x, y in _ERROR_DIALOG_PROBES:
+        if x >= width or y >= height:
+            return False
+        offset = (y * width + x) * 3
+        if min(rgb[offset], rgb[offset + 1], rgb[offset + 2]) < _ERROR_DIALOG_MIN_CHANNEL:
+            return False
+    return True
+
+
+def _find_install_button(frame: Path) -> tuple[int, int] | None:
+    """
+    Locate the Install button on a Summary-page screenshot.
+
+    WHY: the button's y depends on how many lines the Summary lists (BIOS vs UEFI),
+    so a fixed coordinate misses on one of them. The button is found by its border:
+    two neutral-grey rows (_INSTALL_BORDER_RGB) 20..30 rows apart in the column
+    _INSTALL_BUTTON_SCAN_X within _INSTALL_BUTTON_SCAN_Y. Anything else in that band
+    (summary text, Back/Cancel, the window edge) is not in this column or does not
+    form a border pair of that height, so it cannot be mistaken for the button.
+
+    Args:
+        frame: A PNG screenshot of the full 1920x1080 screen.
+
+    Returns:
+        The (x, y) click point at the button's centre, or None if no border pair
+        of the expected height was found (the caller must not click blind).
+    """
+    width, height, rgb = read_png(frame)
+    if _INSTALL_BUTTON_SCAN_X >= width:
+        return None
+    y_start, y_end = _INSTALL_BUTTON_SCAN_Y
+    borders: list[int] = []
+    for y in range(y_start, min(y_end, height - 1) + 1):
+        offset = (y * width + _INSTALL_BUTTON_SCAN_X) * 3
+        r, g, b = rgb[offset], rgb[offset + 1], rgb[offset + 2]
+        if all(abs(c - _INSTALL_BORDER_RGB) <= _INSTALL_BORDER_TOLERANCE for c in (r, g, b)):
+            borders.append(y)
+    low, high = _INSTALL_BUTTON_HEIGHT
+    for top in borders:
+        for bottom in borders:
+            if low <= bottom - top <= high:
+                return (_INSTALL_BUTTON_X, (top + bottom) // 2)
+    return None
+
+
+def _click_next_and_confirm(
+    screen: Any,
+    work_dir: Path,
+    anchor_y: int,
+    current: Path,
+    expected_page: str,
+    *,
+    position: tuple[int, int] = _NEXT_BUTTON,
+    attempts: int = _PAGE_CLICK_ATTEMPTS,
+    wait_s: float = _PAGE_WAIT_S,
+    guard_s: float = _ACTION_SETTLE_GUARD_S,
+    log: Callable[[str], None] = lambda line: None,
+) -> Path:
+    """
+    Click Next and confirm the wizard really reached `expected_page`, re-clicking if not.
+
+    WHY: under load Calamares can ignore a Next click (Welcome's requirements check
+    has not yet enabled the button) or render the next page tens of seconds late. A
+    single click plus one short wait failed both ways. Page identity (the sidebar
+    highlight) judges each attempt, the click is repeated a bounded number of
+    times, and every wait is bounded (attempts x wait_s in total).
+
+    The loop polls with frames=1 and a moving reference: pages often carry a
+    blinking caret that never yields two identical frames, and a transient partial
+    repaint must be walked through rather than accepted or rejected on one sample.
+
+    Args:
+        screen: The QMP client (pointer_click / screendump).
+        work_dir: Scratch directory for settle frames.
+        anchor_y: Sidebar calibration (see _page_at).
+        current: The frame from just before the first click.
+        expected_page: The page name that must be recognised.
+        position: The Next button coordinate.
+        attempts: Maximum number of clicks (>= 1).
+        wait_s: Seconds to wait for the page after each click.
+        guard_s: Pause after a click before the first poll.
+        log: Progress sink.
+
+    Returns:
+        The first frame recognised as `expected_page`.
+
+    Raises:
+        WizardError: the page was not recognised after every attempt, or the wizard
+            overshot to a page after `expected_page`.
+    """
+    reference = current
+    last_page: str | None = None
+    expected_index = _PAGE_NAMES.index(expected_page)
+    start_page = _page_at(current, anchor_y)
+    start_index = _PAGE_NAMES.index(start_page) if start_page is not None else None
+    start_bytes = current.read_bytes()
+    final_path = work_dir / "wizard-next-final.png"
+    click_needed = True
+
+    def check(page: str | None) -> None:
+        # WHY: a page AFTER the expected one means a click already advanced too far;
+        # clicking Next again would only skip further, so stop and say so.
+        if page is not None and _PAGE_NAMES.index(page) > expected_index:
+            raise WizardError(
+                f"overshot: reached {page!r} while waiting for {expected_page!r} (no further Next click made)"
+            )
+
+    for attempt in range(1, attempts + 1):
+        if click_needed:
+            screen.pointer_click(*position)
+        time.sleep(guard_s)
+        deadline = time.monotonic() + wait_s
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            polled = _settle_screen(
+                screen, work_dir, interval_s=0.5, frames=1, timeout_s=remaining, reference=reference.read_bytes()
+            )
+            if polled is None:
+                break  # nothing changed at all before the deadline
+            last_page = _page_at(polled, anchor_y)
+            if last_page == expected_page:
+                return polled
+            check(last_page)
+            reference = polled
+        # WHY: the last polled frame may be a transitional repaint (sidebar not
+        # recognisable) that became the moving reference; the screen then stays
+        # still on the real page and the poll sees "no change". Judge a fresh
+        # frame before deciding to click again.
+        screen.screendump(final_path)
+        last_page = _page_at(final_path, anchor_y)
+        if last_page == expected_page:
+            return final_path
+        check(last_page)
+        if last_page is None:
+            # Unrecognised: re-click only if nothing happened since the click;
+            # otherwise a transition is still in flight, so wait without clicking.
+            click_needed = final_path.read_bytes() == start_bytes
+        else:
+            # Recognised but not yet the expected page: re-click only if the
+            # wizard is still on (or before) the starting page.
+            click_needed = start_index is None or _PAGE_NAMES.index(last_page) <= start_index
+        # Diagnostics, kept permanently: the raw highlight y next to the anchor
+        # makes a wrong calibration visible in the log itself (a page that is on
+        # screen but judged None is otherwise indistinguishable from a page that
+        # never rendered).
+        log(
+            f"Next click {attempt}/{attempts} did not reach {expected_page!r} (sidebar: {last_page!r}, "
+            f"highlight y={_highlighted_row_y(final_path)}, anchor_y={anchor_y})"
+        )
+    raise WizardError(
+        f"expected the {expected_page!r} page within {attempts * wait_s:g}s "
+        f"({attempts} Next clicks; last recognized page: {last_page!r})"
+    )
 
 
 def _click_install_and_confirm(
@@ -1077,12 +1381,17 @@ def _click_install_and_confirm(
         The first frame whose sidebar shows the install (or finish) page.
 
     Raises:
-        WizardError: the wizard still showed another page after every attempt.
+        WizardError: the Install button was not found on `summary_frame`, or the
+            wizard still showed another page after every attempt.
     """
+    # Locate the button on the real frame; never click a guessed position.
+    button = _find_install_button(summary_frame)
+    if button is None:
+        raise WizardError("could not locate the Install button on the Summary page")
     reference = summary_frame
     last_page: str | None = "summary"
     for attempt in range(1, attempts + 1):
-        screen.pointer_click(*_INSTALL_BUTTON)
+        screen.pointer_click(*button)
         time.sleep(guard_s)
         deadline = time.monotonic() + wait_s
         while True:
@@ -1173,74 +1482,18 @@ def run_install(
             raise WizardError(f"the screen did not settle within {timeout_s:g}s")
         return frame
 
-    def wait_for_page(expected_page: str, current: Path, timeout_s: float) -> Path:
-        """
-        Poll (one new frame at a time, frames=1) until a frame's sidebar
-        highlight identifies `expected_page`, or raise on timeout.
-
-        frames=1 deliberately, not the usual 2-consecutive-identical default:
-        Calamares pages commonly land with a text field already focused (Users'
-        "Your Full Name", for instance), whose blinking caret alternates the
-        screen between two states forever and can never produce two identical
-        polls back to back - confirmed live this session (a settle() stuck on
-        exactly this at the KRunner step, see run_install's own krunner-launch
-        comment below for the full story). A single post-change frame is enough
-        on its own merits too: _page_at's own sidebar-colour check, not pixel
-        stability, is what actually verifies the right page was reached.
-
-        This is a RETRY LOOP, not one settle() call, for a second real failure
-        this session: the very first post-change frame is not always the final
-        one - it can be a transient partial-render (confirmed live: a run
-        reached "welcome" correctly, clicked Next, and the very next settled
-        frame matched no page at all, "sidebar shows None" - an in-between
-        repaint, not a bad click). Each failed recognition becomes the new
-        reference for one more "wait for the next change" poll, so a short
-        transition animation is simply walked through frame by frame rather
-        than accepted or rejected on the first sample.
-
-        Args:
-            expected_page: The page name that must eventually be seen.
-            current: The frame from just before whatever action (click, Enter)
-                is expected to lead to `expected_page`.
-            timeout_s: Total seconds allowed across every retry.
-
-        Returns:
-            The first frame recognized as `expected_page`.
-
-        Raises:
-            WizardError: `expected_page` was never recognized in time (message
-                names the last page that WAS recognized, if any, or None).
-        """
-        deadline = time.monotonic() + timeout_s
-        reference = current
-        last_page: str | None = None
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                try:
-                    shot(f"TIMEOUT-expected-{expected_page}")
-                except WizardError:
-                    pass
-                raise WizardError(
-                    f"expected the {expected_page!r} page within {timeout_s:g}s "
-                    f"(last recognized page: {last_page!r})"
-                )
-            time.sleep(_ACTION_SETTLE_GUARD_S)
-            polled = _settle_screen(
-                vm.qmp, work_dir, interval_s=0.5, frames=1, timeout_s=remaining, reference=reference.read_bytes()
+    def click_and_advance(position: tuple[int, int], expected_page: str, current: Path) -> Path:
+        """Click Next (re-clicking a bounded number of times) until `expected_page` shows."""
+        try:
+            return _click_next_and_confirm(
+                vm.qmp, work_dir, anchor_y, current, expected_page, position=position, log=log
             )
-            if polled is None:
-                continue  # no further change at all before the deadline; loop will report it above
-            page = _page_at(polled, anchor_y)
-            if page == expected_page:
-                return polled
-            last_page = page
-            reference = polled
-
-    def click_and_advance(position: tuple[int, int], expected_page: str, current: Path, *, timeout_s: float = 30.0) -> Path:
-        """Click a point known to change the page, then wait_for_page() it."""
-        vm.qmp.pointer_click(*position)
-        return wait_for_page(expected_page, current, timeout_s)
+        except WizardError:
+            try:
+                shot(f"TIMEOUT-expected-{expected_page}")
+            except WizardError:
+                pass  # the page timeout itself is the reportable failure either way
+            raise
 
     try:
         log("waiting for the live desktop")
@@ -1286,9 +1539,9 @@ def run_install(
         time.sleep(_ACTION_SETTLE_GUARD_S)
         frame = settle(5.0, frames=1, reference=frame)
         vm.qmp.send_keys("enter")
-        # Retry loop, same shape as wait_for_page below (anchor_y does not exist
+        # Retry loop, same shape as _click_next_and_confirm (anchor_y does not exist
         # yet - THIS frame is what calibrates it, see _page_at's own docstring -
-        # so wait_for_page itself cannot be used here): keep requiring a further
+        # so that helper itself cannot be used here): keep requiring a further
         # change past any frame that is not yet a recognizable Calamares sidebar,
         # so a transient partial repaint during Calamares' own startup (pkexec
         # authentication + QML loading) cannot be mistaken for "it never launched".
@@ -1305,8 +1558,10 @@ def run_install(
             if anchor_y is not None:
                 break
             reference = frame
+        calibration_frame = screenshots_dir / "calibration.png"
+        shutil.copyfile(frame, calibration_frame)
         frame = shot("welcome")
-        log("welcome")
+        log(f"welcome (sidebar anchor_y={anchor_y}; welcome shot highlight y={_highlighted_row_y(frame)})")
 
         for page in ("location", "keyboard"):
             frame = click_and_advance(_NEXT_BUTTON, page, frame)
@@ -1376,6 +1631,11 @@ def run_install(
                 continue
             page = _page_at(frame, anchor_y)
             log(f"install: sidebar shows {page!r}")
+            # Checked BEFORE the page test: the error dialog sits over a Finish
+            # page whose sidebar highlight would otherwise read as success.
+            if _install_failed_dialog_visible(frame, anchor_y):
+                shot("install-failed")
+                raise InstallFailedError("Calamares reported Installation Failed")
             if page == "finish":
                 finished_frame = frame
                 break

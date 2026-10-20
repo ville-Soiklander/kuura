@@ -31,10 +31,13 @@
 # Calamares package itself, so this project's installer-config and the
 # Calamares binary it configures are guaranteed to agree on what "the
 # default" means. Every file's own top-of-file comment states this again
-# and names the real upstream path it came from. Four files carry deliberate,
+# and names the real upstream path it came from. Five files carry deliberate,
 # flagged changes from that real default (see their own header comments for
 # the exact line(s) and why):
 #   - modules/users.conf:    setRootPassword: true  -> false
+#   - modules/bootloader.conf: efiBootloaderId set to @NAME@ (substituted in
+#     package(); without it every UEFI install failed - see the file's own
+#     header comment)
 #   - settings.conf.in:      THREE changes -
 #       (1) branding: default -> branding: @NAME@ (a plain sed placeholder,
 #           substituted below - NOT a Calamares-side change; upstream's own
@@ -77,7 +80,7 @@
 # header for the full, real, audited content it configures. Every other
 # module config under modules/ (welcome, locale, keyboard, mount, machineid,
 # fstab, initcpiocfg, initcpio, displaymanager, services-systemd, initramfs,
-# bootloader, umount, finished) is likewise vendored completely unchanged -
+# umount, finished) is likewise vendored completely unchanged -
 # this project has no opinion about them yet (docs/ISO_CONTRACT.md's own
 # instruction). Four modules in the real default *sequence* (summary,
 # localecfg, networkcfg, hwclock) ship NO config file at all upstream
@@ -90,7 +93,7 @@
 # depends=('kvantum') already follows for its own theme engine.
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-installer-config"
 pkgver=0.1.0
-pkgrel=2
+pkgrel=4
 pkgdesc="Calamares installer configuration: branding, settings.conf and module defaults generated/vendored from this project's own design tokens and the real upstream Calamares defaults"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
@@ -201,6 +204,15 @@ package() {
     install -Dm644 "$defaults/modules/packages.conf" \
         "$pkgdir/etc/calamares/modules/packages.conf"
 
+    # ---- modules/bootloader.conf: vendored with one flagged change,
+    # efiBootloaderId: @NAME@ (the EFI directory and NVRAM label grub-install
+    # receives; empty without it, which broke every UEFI install - see the
+    # file's own comment), substituted with the same plain sed as above. ----
+    tmp="$(mktemp)"
+    sed "s/@NAME@/${DISTRO_NAME}/g" "$defaults/modules/bootloader.conf" > "$tmp"
+    install -Dm644 "$tmp" "$pkgdir/etc/calamares/modules/bootloader.conf"
+    rm -f "$tmp"
+
     # ---- Every other module in the real default sequence that ships a real
     # default config file (docs/ISO_CONTRACT.md's own locked module
     # sequence): vendored completely unchanged, this project has no opinion
@@ -212,7 +224,7 @@ package() {
     local other_modules=(
         welcome locale keyboard mount unpackfs machineid fstab
         initcpiocfg initcpio displaymanager services-systemd initramfs
-        bootloader umount finished
+        umount finished
     )
     local m
     for m in "${other_modules[@]}"; do

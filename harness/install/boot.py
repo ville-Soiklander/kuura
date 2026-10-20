@@ -193,7 +193,9 @@ def _escape(path: Path) -> str:
     return str(path).replace(",", ",,")
 
 
-def build_command(config: InstallVmConfig, run_dir: Path, *, attach_guest_agent: bool) -> list[str]:
+def build_command(
+    config: InstallVmConfig, run_dir: Path, *, attach_guest_agent: bool, agent_channel: bool = False
+) -> list[str]:
     """
     Assemble the QEMU command line as a list (never a shell string).
 
@@ -203,6 +205,11 @@ def build_command(config: InstallVmConfig, run_dir: Path, *, attach_guest_agent:
             log and (UEFI only) the per-run copy of the VARS image.
         attach_guest_agent: Whether to add the virtio-serial guest-agent device
             (phase 2 only - see module docstring).
+        agent_channel: Add the same virtio-serial guest-agent device even though
+            no client waits for it at boot. Phase 1 uses this so that, only if
+            Calamares fails, the harness can connect on demand and pull the
+            installer's own log before the live VM is gone (the live medium's
+            qemu-guest-agent udev rule starts the service once the port exists).
 
     Returns:
         The argument list, program first. Omits ``-cdrom`` entirely when
@@ -258,7 +265,7 @@ def build_command(config: InstallVmConfig, run_dir: Path, *, attach_guest_agent:
         "-qmp", f"unix:{_escape(run_dir / 'qmp.sock')},server=on,wait=off",
     ]
 
-    if attach_guest_agent:
+    if attach_guest_agent or agent_channel:
         command += [
             "-chardev", f"socket,id=qga0,path={_escape(run_dir / 'qga.sock')},server=on,wait=off",
             "-device", "virtio-serial-pci",
@@ -324,9 +331,24 @@ class InstallVm:
         *,
         attach_guest_agent: bool = False,
         guest_user: GuestUser | None = None,
+        live_agent_channel: bool = False,
     ) -> None:
+        """
+        Args:
+            config: The VM configuration.
+            attach_guest_agent: See the class docstring (phase 2 only).
+            guest_user: Required when attach_guest_agent is True.
+            live_agent_channel: Attach the guest-agent device in phase 1 without
+                connecting to it at boot; ``connect_live_agent()`` connects later,
+                on demand (used to pull Calamares' log after a failed install).
+                Ignored after ``reboot_to_disk_only()``.
+
+        Raises:
+            ValueError: attach_guest_agent is True without a guest_user.
+        """
         if attach_guest_agent and guest_user is None:
             raise ValueError("guest_user is required when attach_guest_agent is True")
+        self._live_agent_channel = live_agent_channel
         self.config = config
         self.qmp: Qmp | None = None
         self.agent: GuestAgent | None = None
@@ -426,7 +448,9 @@ class InstallVm:
         """
         self._preflight()
         run_dir = self._make_run_dir()
-        command = build_command(self.config, run_dir, attach_guest_agent=self._attach_guest_agent)
+        command = build_command(
+            self.config, run_dir, attach_guest_agent=self._attach_guest_agent, agent_channel=self._live_agent_channel
+        )
         self._log_file = open(run_dir / "qemu.log", "wb")  # noqa: SIM115 - closed in stop()
         self._t0 = time.monotonic()
         # start_new_session: a real setsid at the syscall level, so stop() can kill
@@ -545,6 +569,8 @@ class InstallVm:
         self.stop()
 
         self.config = new_config
+        # Phase 2 decides about its own agent channel solely through attach_guest_agent.
+        self._live_agent_channel = False
         self._attach_guest_agent = attach_guest_agent
         self._guest_user = guest_user
         self.timings = {}
@@ -554,6 +580,40 @@ class InstallVm:
         except BaseException:
             self.stop()
             raise
+
+    def connect_live_agent(self, timeout_s: float = 90.0) -> GuestAgent:
+        """
+        Connect, on demand, to the guest agent of a running phase-1 live session.
+
+        Only used for diagnostics (pulling Calamares' own log after a failed
+        install): the wizard itself is driven over QMP only, so a live session
+        whose agent never answers must not fail a run that is otherwise fine.
+
+        Args:
+            timeout_s: Seconds to wait for the socket and for the agent to answer.
+
+        Returns:
+            The connected agent (also stored as ``self.agent`` so ``stop()`` closes it).
+
+        Raises:
+            RuntimeError: the VM was not started with ``live_agent_channel=True`` or
+                is no longer running.
+            TimeoutError, ConnectionError, OSError: the agent did not answer in time.
+        """
+        if self.agent is not None:
+            return self.agent
+        if not self._live_agent_channel or self._run_dir is None or not self.is_alive():
+            raise RuntimeError("no live guest-agent channel is available")
+        # The agent runs as root; the user only matters for run_as_user(), which
+        # diagnostics never call, so the image default is sufficient here.
+        agent = GuestAgent.connect(self._run_dir / "qga.sock", GuestUser(), min(30.0, timeout_s), self.is_alive)
+        try:
+            agent.wait_ready(timeout_s, alive=self.is_alive)
+        except BaseException:
+            agent.close()
+            raise
+        self.agent = agent
+        return agent
 
     def serial_tail(self, lines: int = 30) -> list[str]:
         """

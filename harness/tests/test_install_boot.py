@@ -261,6 +261,9 @@ def test_a_boot_that_times_out_leaves_no_process_and_no_directory(tmp_path: Path
     monkeypatch.setattr(tempfile, "tempdir", str(scratch))
     disk = tmp_path / "disk.qcow2"
     disk.write_bytes(b"")
+    # The default config points at tmp_path/live.iso; _start() rejects a missing ISO
+    # before it ever launches the fake QEMU, so the file must exist (content unused).
+    (tmp_path / "live.iso").write_bytes(b"")
     pid_file = tmp_path / "pid"
     script = write_fake_qemu(tmp_path, f'echo $$ > "{pid_file}"\nexec sleep 60\n')
     config = _config(tmp_path, disk_path=disk, qemu_binary=str(script), require_kvm=False, boot_timeout_s=1.0)
@@ -283,6 +286,8 @@ def test_a_qemu_that_exits_at_once_is_reported_quickly(tmp_path: Path, monkeypat
     monkeypatch.setattr(tempfile, "tempdir", str(scratch))
     disk = tmp_path / "disk.qcow2"
     disk.write_bytes(b"")
+    # See the sibling timeout test: the ISO must exist or _start() fails before QEMU.
+    (tmp_path / "live.iso").write_bytes(b"")
     script = write_fake_qemu(tmp_path, "echo 'qemu: bad option' >&2\nexit 3\n")
     config = _config(tmp_path, disk_path=disk, qemu_binary=str(script), require_kvm=False, boot_timeout_s=120.0)
     started = time.monotonic()

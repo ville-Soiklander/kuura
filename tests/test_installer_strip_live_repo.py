@@ -160,3 +160,13 @@ def test_pkgbuild_installs_helper_and_substitutes_name() -> None:
     assert "strip_live_repo.py" in text
     assert re.search(r"sed .*@NAME@.*shellprocess\.conf", text)
     assert re.search(r"^depends=\(.*'python'", text, re.M)
+
+
+def test_shellprocess_timeout_tolerates_a_slow_initramfs_step() -> None:
+    """
+    REGRESSION: the mkinitcpio step exceeded the old 30 s limit on a loaded host and
+    aborted the install. The per-command timeout must leave minutes of headroom.
+    """
+    data = yaml.safe_load(SHELLPROCESS.read_text(encoding="utf-8"))
+    assert any("mkinitcpio" in line for line in _script_lines())
+    assert data["timeout"] >= 300

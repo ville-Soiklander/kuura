@@ -113,8 +113,10 @@ from harness.install.testpackages import (
     install_test_only_packages,
 )
 from harness.install.wizard import (
+    InstallFailedError,
     WizardCredentials,
     WizardError,
+    collect_install_failure_logs,
     inject_test_only_session_config,
     log_into_sddm,
     run_install,
@@ -451,9 +453,17 @@ def run_installed_verify(
             if made.returncode != 0:
                 raise InstallVmEnvironmentError(f"qemu-img create failed: {made.stderr.strip()}")
 
-            with InstallVm(config) as vm:
+            # live_agent_channel: the wizard never uses the agent, but if Calamares
+            # fails, its own session log (the only place the failing job's
+            # traceback is written) exists only inside this live VM - it must be
+            # pulled out before the `with` block powers the VM off.
+            with InstallVm(config, live_agent_channel=True) as vm:
                 log("driving the Calamares wizard")
-                wizard_result = run_install(vm, options.credentials, fw_dir / "wizard", log=log)
+                try:
+                    wizard_result = run_install(vm, options.credentials, fw_dir / "wizard", log=log)
+                except InstallFailedError:
+                    _pull_failure_logs(vm, fw_dir, log)
+                    raise
                 fw_entry["install"] = {"finished": wizard_result.finished, "duration_s": wizard_result.duration_s}
 
                 log("rebooting the installed disk, no ISO attached")
@@ -543,6 +553,31 @@ def run_installed_verify(
     manifest["total_seconds"] = round(time.monotonic() - started, 1)
     (options.out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return (EXIT_OK if overall_ok else EXIT_FAILED), manifest
+
+
+def _pull_failure_logs(vm: Any, fw_dir: Path, log: Any) -> list[Path]:
+    """
+    Connect to the failed live session's guest agent and save Calamares' logs.
+
+    Never raises for an unreachable agent: the caller re-raises the original
+    InstallFailedError, which stays the reported failure either way.
+
+    Args:
+        vm: The still-running phase-1 InstallVm (started with live_agent_channel=True).
+        fw_dir: ``<out>/<firmware>``; receives ``calamares-session.log`` and
+            ``journal-tail.log``.
+        log: Progress callback.
+
+    Returns:
+        The files written (empty when the agent could not be reached).
+    """
+    log("install failed: pulling Calamares' session log from the live guest")
+    try:
+        agent = vm.connect_live_agent()
+    except (TimeoutError, ConnectionError, RuntimeError, OSError, ValueError) as exc:
+        log(f"install failed: live guest agent unreachable, no logs pulled: {exc}")
+        return []
+    return collect_install_failure_logs(agent, fw_dir, log=log)
 
 
 def _parse_firmwares(text: str | None) -> list[Firmware]:
