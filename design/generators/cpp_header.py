@@ -72,6 +72,8 @@ Properties:
 
 from __future__ import annotations
 
+import re
+
 # Leaf collection intentionally mirrors design/generators/qml_singleton.py's own
 # _collect_leaves rather than importing it: that function is a private (leading
 # underscore) implementation detail of a different generator module, not a shared
@@ -187,4 +189,83 @@ def render(tokens: dict) -> str:
         lines.append(f"inline constexpr {cpp_type} {const_name} = {literal};")
     lines.append("} // namespace Kuura::Tokens")
 
+    return "\n".join(lines) + "\n"
+
+
+# "#RRGGBB" or "#RRGGBBAA", the only colour forms design/validate.py accepts.
+_HEX_COLOR = re.compile(r"#([0-9A-Fa-f]{6})([0-9A-Fa-f]{2})?")
+
+
+def _hex_to_rgba_literal(value: object, where: str) -> str:
+    """
+    Convert a "#RRGGBB" / "#RRGGBBAA" token into a 0xRRGGBBAAu C++ literal.
+
+    Args:
+        value: The colour token value.
+        where: Dotted token path, used only in the error message.
+
+    Returns:
+        E.g. "0xE5534BFFu" (uppercase hex; "#RRGGBB" gets alpha FF).
+
+    Raises:
+        ValueError: if value is not a string in one of the two accepted forms.
+    """
+    match = _HEX_COLOR.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise ValueError(f"{where}: not a #RRGGBB or #RRGGBBAA colour: {value!r}")
+    # WHY alpha defaults to FF: an opaque token carries no alpha digits, but the
+    # packed 0xRRGGBBAA constant always has four channels.
+    alpha = match.group(2) or "FF"
+    return f"0x{(match.group(1) + alpha).upper()}u"
+
+
+def render_colors(tokens: dict) -> str:
+    """
+    Render the per-mode colour tokens as a C++ header ("token_colors.h").
+
+    WHY a separate function: render() is mode-independent and skips `color.*`, and
+    must stay byte-identical so packages/kuura-frost is unaffected. Native code that
+    needs both palettes at compile time (packages/kuura-decoration) includes this one.
+
+    Output: `#pragma once`, a comment block, `#include <cstdint>`, then namespace
+    Kuura::Tokens::Light and Kuura::Tokens::Dark, each holding one
+    `inline constexpr std::uint32_t kName = 0xRRGGBBAAu;` per leaf of
+    tokens["color"][mode], sorted by constant name (k + PascalCase of the key).
+    LF line endings, single trailing newline.
+
+    Args:
+        tokens: Validated token dictionary with color.light and color.dark.
+
+    Returns:
+        The complete header content.
+
+    Raises:
+        ValueError: if color.light / color.dark is missing or not a dict, or any
+            value is not a #RRGGBB / #RRGGBBAA string.
+    """
+    colors = tokens.get("color")
+    lines = [
+        "#pragma once",
+        "",
+        "// Colour tokens - generated from design/tokens.json, do not edit by hand.",
+        '// Each value is 0xRRGGBBAA; a "#RRGGBB" token gets AA = FF.',
+        "#include <cstdint>",
+    ]
+    for mode in ("light", "dark"):
+        palette = colors.get(mode) if isinstance(colors, dict) else None
+        if not isinstance(palette, dict):
+            raise ValueError(f"color.{mode}: missing or not a dict")
+        # WHY sorted on the emitted constant name, not the token key: the order
+        # must follow the C++ identifiers so the output is stable and diff-friendly.
+        constants = {
+            "k" + _to_pascal_case(key): _hex_to_rgba_literal(value, f"color.{mode}.{key}")
+            for key, value in palette.items()
+        }
+        namespace = f"Kuura::Tokens::{mode.capitalize()}"
+        lines.append("")
+        lines.append(f"namespace {namespace}")
+        lines.append("{")
+        for const_name in sorted(constants):
+            lines.append(f"inline constexpr std::uint32_t {const_name} = {constants[const_name]};")
+        lines.append(f"}} // namespace {namespace}")
     return "\n".join(lines) + "\n"

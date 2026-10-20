@@ -12,7 +12,10 @@
 // COMPUTED from frost.h's apply() docstring formulas (points 1-3: edge
 // distance, refraction, specular highlight) -- the arithmetic is worked out in
 // the comments below, not derived by running the shader once and copying its
-// output (that would prove nothing). Point 4 (dither noise) is inherently
+// output (that would prove nothing). Passes 6-7 cover the light-surface rim
+// (frost_shader.h, "LIGHT-SURFACE RIM") and pass 8 the backdrop refraction
+// shader (kFrostBackdropFragmentShaderSource) -- both added 2026-10-20, when
+// refraction moved from the window's own content to the backdrop. Point 4 (dither noise) is inherently
 // random by design and cannot have a single "hand-computed" expected value;
 // it is instead checked for the correct BOUNDED, non-negative, additive
 // contribution its own formula promises (see expectNoiseBounded in main()).
@@ -74,11 +77,13 @@
 // gl.h already defined).
 #include <GL/glext.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace
@@ -460,11 +465,23 @@ int main()
     glUniform1i_(glGetUniformLocation_(program, "textureWidth"), kWindowWidth);
     glUniform1i_(glGetUniformLocation_(program, "textureHeight"), kWindowHeight);
     glUniform2f_(glGetUniformLocation_(program, "noiseTextureSize"), static_cast<float>(kNoiseTextureSize), static_cast<float>(kNoiseTextureSize));
-    glUniform1f_(glGetUniformLocation_(program, "refractionStrength"), Kuura::Tokens::kMaterialRefractionStrength);
-    glUniform1f_(glGetUniformLocation_(program, "refractionEdgeFalloff"), static_cast<float>(Kuura::Tokens::kMaterialRefractionEdgeFalloff));
     glUniform1f_(glGetUniformLocation_(program, "edgeHighlightWidth"), Kuura::Tokens::kMaterialEdgeHighlightWidth);
     glUniform1f_(glGetUniformLocation_(program, "edgeHighlightOpacity"), Kuura::Tokens::kMaterialEdgeHighlightOpacity);
     const GLint noiseAmountLocation = glGetUniformLocation_(program, "noiseAmount");
+    glUniform1f_(glGetUniformLocation_(program, "lightRimOpacity"), Kuura::Tokens::kMaterialEdgeHighlightLightHairlineOpacity);
+    glUniform1f_(glGetUniformLocation_(program, "lightRimWidth"), Kuura::Tokens::kMaterialEdgeHighlightLightHairlineWidth);
+    const GLint lumaLowLocation = glGetUniformLocation_(program, "lightRimLumaLow");
+    const GLint lumaHighLocation = glGetUniformLocation_(program, "lightRimLumaHigh");
+    // Passes 1-5 test geometry (edges, orientation, highlight, premultiplied
+    // coverage) on a UV-gradient input whose luma spans the light-rim ramp, so
+    // the light-surface rim would otherwise switch on partially at some pixels.
+    // A ramp of [2, 3] is above any possible luma (<= 1): light weight is
+    // exactly 0 there. Passes 6-7 use the REAL thresholds.
+    const auto setLightRimRamp = [lumaLowLocation, lumaHighLocation](float low, float high) {
+        glUniform1f_(lumaLowLocation, low);
+        glUniform1f_(lumaHighLocation, high);
+    };
+    setLightRimRamp(2.0F, 3.0F);
     // modulation defaults to (0,0,0,0) if never set (its uniform location
     // resolves fine since the real shader declares it) -- must be identity
     // (1,1,1,1) here, since this test is isolating the material math itself,
@@ -560,12 +577,13 @@ int main()
     // refractedUv = (0.505, 1 - 49.5/50) = (0.505, 0.01) -> (128.775, 2.55, 128)
     expectPixel("BOTTOM EDGE", 50, 0, 128.775, 2.55, 128.0, 255.0);
 
-    // ---- NEAR-BOTTOM REFRACTION: readPixel(50, 5) -> pixelPos = (50.5, 44.5) ----
-    // distBottom = 5.5 (inside the 12px falloff, outside the 1px highlight).
-    // falloff = 1 - 5.5/12 = 0.541667; offset = (0, +0.42*0.541667) = (0, 0.2275)
-    // sample pixelPos = (50.5, 44.7275) -> refractedUv = (0.505, 1 - 0.89455)
-    //   = (0.505, 0.10545) -> r = 128.775, g = 26.890; no highlight.
-    expectPixel("NEAR-BOTTOM REFRACTION", 50, 5, 128.775, 26.890, 128.0, 255.0);
+    // ---- NEAR-BOTTOM, NO WINDOW DISPLACEMENT: readPixel(50, 5) -> pixelPos = (50.5, 44.5) ----
+    // REQUIREMENT CHANGE 2026-10-20: refraction now displaces the BACKDROP
+    // (PASS 8), not the window's own content. This pixel is inside the
+    // refraction falloff (distBottom = 5.5 < edge_falloff) and the former
+    // shader sampled 0.2275 px lower here (g = 26.890); it must now be an
+    // unmodified sample at texcoord0 = (0.505, 0.11) -> r = 128.775, g = 28.05.
+    expectPixel("NEAR-BOTTOM NO DISPLACEMENT", 50, 5, 128.775, 28.05, 128.0, 255.0);
 
     // ---- CENTRE: readPixel(50, 25) -> pixelPos = (50.5, 24.5) ----
     // edgeDist = min(50.5, 49.5, 24.5, 25.5) = 24.5 > 12 -> no refraction, no
@@ -628,12 +646,11 @@ int main()
     expectPixel("GLASS TOP-LEFT CORNER", 20, 39, mixK(52.275, 255.0), mixK(201.45, 255.0), mixK(128.0, 255.0), 255.0);
 
     // ---- NEAR GLASS RIGHT EDGE: readPixel(75, 24) -> pixelPos = (75.5, 25.5) ----
-    // local = (55.5, 15.5): distRight = 60 - 55.5 = 4.5 is the minimum
-    // (left 55.5, top 15.5, bottom 14.5) -> normal (1, 0).
-    // falloff = 1 - 4.5/12 = 0.625; offset x = 0.42*0.625 = 0.2625
-    // sample pixelPos = (75.7625, 25.5) -> uv (0.757625, 0.49)
-    //   r = 0.757625*255 = 193.194, g = 0.49*255 = 124.95, b = 128; no highlight.
-    expectPixel("NEAR GLASS RIGHT EDGE", 75, 24, 193.194, 124.95, 128.0, 255.0);
+    // local = (55.5, 15.5): 4.5 px from the glass rect's right edge, inside the
+    // refraction falloff. Former expectation (window content refracted 0.2625
+    // px outward): r = 193.194. Now unmodified: uv (0.755, 0.49) ->
+    //   r = 0.755*255 = 192.525, g = 124.95, b = 128; no highlight.
+    expectPixel("NEAR GLASS RIGHT EDGE", 75, 24, 192.525, 124.95, 128.0, 255.0);
 
     // =========================================================================
     // PASS 4: glassRect all zero (the GLSL default before Frost::apply() has
@@ -676,6 +693,325 @@ int main()
     draw();
     // Noise delta bound scales with coverage: noiseAmount * 255 * (128/255).
     expectNoiseBounded("HALF-COVERED CENTRE WITH NOISE", readPixel(50, 25), halfCentreNoNoise, Kuura::Tokens::kMaterialNoise * 128.0);
+
+    // =========================================================================
+    // PASSES 6-7: LIGHT-SURFACE RIM (requirement change 2026-10-20). Real
+    // thresholds from here on. Inputs are uniform premultiplied surfaces at the
+    // panel token's coverage (bg_opacity.panel 0.62 -> a = 158 of 255), with
+    // the noise off so every value is deterministic. Expected values come from
+    // windowRim() below -- the shader's own formula written out in C++ from
+    // the token values -- and, for "unchanged in dark mode", from oldRim(),
+    // the pre-change formula.
+    // =========================================================================
+    setLightRimRamp(Kuura::Tokens::kMaterialEdgeHighlightLightLumaLow, Kuura::Tokens::kMaterialEdgeHighlightLightLumaHigh);
+    glUniform1f_(noiseAmountLocation, 0.0F);
+    glUniform4f_(glassRectLocation, 0.0F, 0.0F, static_cast<float>(kWindowWidth), static_cast<float>(kWindowHeight));
+
+    const double highlightWidth = Kuura::Tokens::kMaterialEdgeHighlightWidth;
+    const double highlightOpacity = Kuura::Tokens::kMaterialEdgeHighlightOpacity;
+    const double rimWidth = Kuura::Tokens::kMaterialEdgeHighlightLightHairlineWidth;
+    const double rimOpacity = Kuura::Tokens::kMaterialEdgeHighlightLightHairlineOpacity;
+    // GLSL smoothstep(), for the light weight.
+    const auto smoothstep = [](double edge0, double edge1, double x) {
+        const double t = std::clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
+        return t * t * (3.0 - 2.0 * t);
+    };
+    // The PRE-CHANGE highlight: mix toward (a, a, a) by clamp(1 - d / width)
+    // * opacity, d = distance from the top or left edge (max of the two).
+    const auto oldRim = [&](double c, double a, double lx, double ly) {
+        const double hl = std::max(std::clamp(1.0 - ly / highlightWidth, 0.0, 1.0), std::clamp(1.0 - lx / highlightWidth, 0.0, 1.0));
+        return c + (a - c) * hl * highlightOpacity;
+    };
+    // The NEW rim for one grey premultiplied channel c at coverage a, at
+    // glass-local position (lx, ly) of a kWindowWidth x kWindowHeight glass.
+    const auto windowRim = [&](double c, double a, double lx, double ly) {
+        const double weight = smoothstep(Kuura::Tokens::kMaterialEdgeHighlightLightLumaLow, Kuura::Tokens::kMaterialEdgeHighlightLightLumaHigh, c / a);
+        const double shift = weight * rimWidth;
+        const auto lit = [&](double d) { return d >= 0.0 ? std::clamp(1.0 - d / highlightWidth, 0.0, 1.0) : 0.0; };
+        const double hl = std::max(lit(ly - shift), lit(lx - shift));
+        const double highlighted = c + (a - c) * hl * highlightOpacity;
+        const double edgeDist = std::min(std::min(lx, kWindowWidth - lx), std::min(ly, kWindowHeight - ly));
+        const double hairline = std::clamp(rimWidth - edgeDist + 0.5, 0.0, 1.0) * weight;
+        return highlighted * (1.0 - hairline * rimOpacity);
+    };
+    // Fills the input texture with one uniform premultiplied grey.
+    const auto uploadUniformGrey = [gradientTexture](uint8_t c, uint8_t a) {
+        std::vector<uint8_t> pixels(static_cast<size_t>(kGradientTextureSize) * kGradientTextureSize * 4, 0);
+        for (size_t i = 0; i < pixels.size(); i += 4) {
+            pixels[i + 0] = c;
+            pixels[i + 1] = c;
+            pixels[i + 2] = c;
+            pixels[i + 3] = a;
+        }
+        glActiveTexture_(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, gradientTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kGradientTextureSize, kGradientTextureSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    };
+    const auto expectGrey = [&allPassed](const char *title, int px, int py, double c, double a) {
+        std::printf("%s (%d,%d):\n", title, px, py);
+        const SampledPixel pixel = readPixel(px, py);
+        nearlyEqual(pixel.r, c, "R", allPassed);
+        nearlyEqual(pixel.g, c, "G", allPassed);
+        nearlyEqual(pixel.b, c, "B", allPassed);
+        nearlyEqual(pixel.a, a, "A", allPassed);
+    };
+    constexpr double kPanelAlpha = 158.0; // round(0.62 * 255)
+
+    // ---- PASS 6: DARK surface, colour 0.13 (c = round(0.13 * 158) = 21):
+    // luma 21/158 = 0.133, far below kLightRimLumaLow -> weight exactly 0, so
+    // the output must equal the PRE-CHANGE formula pixel for pixel. ----
+    {
+        constexpr double c = 21.0;
+        uploadUniformGrey(21, 158);
+        draw();
+        expectGrey("DARK TOP-LEFT CORNER (unchanged)", 0, 49, oldRim(c, kPanelAlpha, 0.5, 0.5), kPanelAlpha);
+        expectGrey("DARK TOP EDGE (unchanged)", 50, 49, oldRim(c, kPanelAlpha, 50.5, 0.5), kPanelAlpha);
+        expectGrey("DARK 2ND ROW (unchanged)", 50, 48, oldRim(c, kPanelAlpha, 50.5, 1.5), kPanelAlpha);
+        // No dark hairline on the bottom/right edges in dark mode.
+        expectGrey("DARK BOTTOM EDGE (no hairline)", 50, 0, c, kPanelAlpha);
+        expectGrey("DARK RIGHT EDGE (no hairline)", 99, 25, c, kPanelAlpha);
+    }
+
+    // ---- PASS 7: LIGHT surface, colour 0.94 (c = round(0.94 * 158) = 149),
+    // composited (on the CPU, exactly as GL_ONE, GL_ONE_MINUS_SRC_ALPHA would)
+    // over a near-white frosted backdrop of 245. ----
+    {
+        constexpr double c = 149.0;
+        constexpr double backdrop = 245.0;
+        const auto composite = [backdrop](double premultiplied) { return premultiplied + backdrop * (255.0 - kPanelAlpha) / 255.0; };
+        uploadUniformGrey(149, 158);
+        draw();
+        expectGrey("LIGHT TOP EDGE (hairline)", 50, 49, windowRim(c, kPanelAlpha, 50.5, 0.5), kPanelAlpha);
+        expectGrey("LIGHT 2ND ROW (shifted highlight)", 50, 48, windowRim(c, kPanelAlpha, 50.5, 1.5), kPanelAlpha);
+        expectGrey("LIGHT BOTTOM EDGE (hairline)", 50, 0, windowRim(c, kPanelAlpha, 50.5, 49.5), kPanelAlpha);
+        expectGrey("LIGHT CENTRE (untouched)", 50, 25, c, kPanelAlpha);
+
+        // Contrast of the top rim row against the interior, on screen. The
+        // backdrop term is identical for both pixels and cancels; it is kept
+        // so the printed numbers are the real on-screen levels.
+        const double interior = composite(readPixel(50, 25).r);
+        const double newContrast = std::fabs(composite(readPixel(50, 49).r) - interior);
+        const double oldContrast = std::fabs(composite(oldRim(c, kPanelAlpha, 50.5, 0.5)) - composite(c));
+        // "Measurably above": by more than twice this file's whole error budget.
+        const bool ok = newContrast > oldContrast + 2.0 * kEpsilonBytes;
+        std::printf("LIGHT RIM CONTRAST vs near-white backdrop:\n  old=%7.3f new=%7.3f (need > old + %.1f) %s\n", oldContrast,
+                    newContrast, 2.0 * kEpsilonBytes, ok ? "OK" : "FAIL");
+        if (!ok) {
+            allPassed = false;
+        }
+    }
+
+    // =========================================================================
+    // PASS 8: BACKDROP REFRACTION (kFrostBackdropFragmentShaderSource), the
+    // pass Frost::drawWindow() draws onto the real render target over Blur's
+    // output. Float input and output (RGBA32F) so a sub-pixel displacement is
+    // measured exactly: the input texel (tx, ty) stores its own centre in
+    // TOP-LEFT-origin backdrop pixels, (tx + 0.5, H - (ty + 0.5)), so the
+    // sampled R/G IS the position the shader read. Displacement = sample -
+    // own position. Expectations from the tokens: d(edgeDist) = strength *
+    // edge_falloff * clamp(1 - edgeDist / edge_falloff, 0, 1), INWARD.
+    // =========================================================================
+    constexpr int kBackdropWidth = 64;
+    constexpr int kBackdropHeight = 40;
+    // Bilinear weights may be quantized by the rasteriser (8 fractional bits
+    // is common): 1/256 px plus float slack. One displacement step between
+    // neighbouring pixels is strength (0.035 px at the original tokens), well
+    // above this.
+    constexpr double kPositionEpsilon = 0.005;
+    const double strength = Kuura::Tokens::kMaterialRefractionStrength;
+    const double falloffPx = static_cast<double>(Kuura::Tokens::kMaterialRefractionEdgeFalloff);
+    const auto expectedDisplacement = [strength, falloffPx](double edgeDist) {
+        return strength * falloffPx * std::clamp(1.0 - edgeDist / falloffPx, 0.0, 1.0);
+    };
+
+    const GLuint backdropFragment = compileShader(GL_FRAGMENT_SHADER, Kuura::kFrostBackdropFragmentShaderSource);
+    if (backdropFragment == 0) {
+        return EXIT_FAILURE;
+    }
+    const GLuint backdropProgram = glCreateProgram_();
+    glAttachShader_(backdropProgram, vertexShader);
+    glAttachShader_(backdropProgram, backdropFragment);
+    glBindAttribLocation_(backdropProgram, 0, "position");
+    glBindAttribLocation_(backdropProgram, 1, "texcoord");
+    glLinkProgram_(backdropProgram);
+    glGetProgramiv_(backdropProgram, GL_LINK_STATUS, &linked);
+    if (linked == GL_FALSE) {
+        std::fprintf(stderr, "backdrop program link failed\n");
+        return EXIT_FAILURE;
+    }
+    glUseProgram_(backdropProgram);
+    glUniformMatrix4fv_(glGetUniformLocation_(backdropProgram, "modelViewProjectionMatrix"), 1, GL_FALSE, identityMvp);
+    glUniform1i_(glGetUniformLocation_(backdropProgram, "sampler"), 0);
+    glUniform2f_(glGetUniformLocation_(backdropProgram, "backdropSize"), static_cast<float>(kBackdropWidth), static_cast<float>(kBackdropHeight));
+    glUniform1f_(glGetUniformLocation_(backdropProgram, "refractionStrength"), Kuura::Tokens::kMaterialRefractionStrength);
+    glUniform1f_(glGetUniformLocation_(backdropProgram, "refractionEdgeFalloff"), static_cast<float>(Kuura::Tokens::kMaterialRefractionEdgeFalloff));
+
+    std::vector<float> positions(static_cast<size_t>(kBackdropWidth) * kBackdropHeight * 4);
+    for (int ty = 0; ty < kBackdropHeight; ++ty) {
+        for (int tx = 0; tx < kBackdropWidth; ++tx) {
+            const size_t offset = (static_cast<size_t>(ty) * kBackdropWidth + tx) * 4;
+            positions[offset + 0] = static_cast<float>(tx) + 0.5F;
+            positions[offset + 1] = static_cast<float>(kBackdropHeight) - (static_cast<float>(ty) + 0.5F);
+            positions[offset + 2] = 0.0F;
+            positions[offset + 3] = 1.0F;
+        }
+    }
+    GLuint backdropTexture = 0;
+    glGenTextures(1, &backdropTexture);
+    glActiveTexture_(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, backdropTexture);
+    // GL_LINEAR + GL_CLAMP_TO_EDGE: the copy texture's real parameters in
+    // Frost::refractBackdrop().
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, kBackdropWidth, kBackdropHeight, 0, GL_RGBA, GL_FLOAT, positions.data());
+
+    GLuint backdropOutput = 0;
+    glGenTextures(1, &backdropOutput);
+    glBindTexture(GL_TEXTURE_2D, backdropOutput);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, kBackdropWidth, kBackdropHeight, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    GLuint backdropFbo = 0;
+    glGenFramebuffers_(1, &backdropFbo);
+    glBindFramebuffer_(GL_FRAMEBUFFER, backdropFbo);
+    glFramebufferTexture2D_(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, backdropOutput, 0);
+    if (glCheckFramebufferStatus_(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::fprintf(stderr, "float framebuffer incomplete\n");
+        return EXIT_FAILURE;
+    }
+    glViewport(0, 0, kBackdropWidth, kBackdropHeight);
+    glActiveTexture_(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, backdropTexture);
+    draw();
+
+    std::vector<float> result(static_cast<size_t>(kBackdropWidth) * kBackdropHeight * 4);
+    glReadPixels(0, 0, kBackdropWidth, kBackdropHeight, GL_RGBA, GL_FLOAT, result.data());
+    // Displacement at top-left-origin backdrop pixel (x, y), x/y = column/row.
+    const auto displacementAt = [&result](int x, int y) {
+        const int glRow = kBackdropHeight - 1 - y;
+        const size_t offset = (static_cast<size_t>(glRow) * kBackdropWidth + x) * 4;
+        return std::pair<double, double>{result[offset + 0] - (x + 0.5), result[offset + 1] - (y + 0.5)};
+    };
+    const auto check = [&allPassed](const char *label, double actual, double expected, double epsilon) {
+        const bool ok = std::fabs(actual - expected) <= epsilon;
+        std::printf("  %-34s expected=%8.4f actual=%8.4f %s\n", label, expected, actual, ok ? "OK" : "FAIL");
+        if (!ok) {
+            allPassed = false;
+        }
+    };
+
+    // ---- Left-edge profile along the middle row: inward is +x. Values match
+    // the token formula, are monotonically non-increasing with distance, and
+    // reach exactly 0 at edge_falloff. ----
+    std::printf("BACKDROP LEFT-EDGE PROFILE (row %d, inward = +x):\n", kBackdropHeight / 2);
+    double previous = 1.0e9;
+    bool monotonic = true;
+    char label[64];
+    for (int x = 0; x <= static_cast<int>(falloffPx) + 2; ++x) {
+        const auto [dx, dy] = displacementAt(x, kBackdropHeight / 2);
+        std::snprintf(label, sizeof(label), "x=%d dx", x);
+        check(label, dx, expectedDisplacement(x + 0.5), kPositionEpsilon);
+        check("     dy", dy, 0.0, kPositionEpsilon);
+        if (dx > previous + kPositionEpsilon) {
+            monotonic = false;
+        }
+        previous = dx;
+    }
+    std::printf("  %-34s %s\n", "monotonic non-increasing", monotonic ? "OK" : "FAIL");
+    if (!monotonic) {
+        allPassed = false;
+    }
+    // The pixel at the edge is displaced by the token maximum minus half a
+    // pixel of falloff -- strictly positive, so the pass is not a no-op.
+    if (!(displacementAt(0, kBackdropHeight / 2).first > kPositionEpsilon)) {
+        std::printf("  edge pixel not displaced: FAIL\n");
+        allPassed = false;
+    }
+
+    // ---- The other three edges: inward direction (top-left origin). ----
+    std::printf("BACKDROP OTHER EDGES (inward):\n");
+    const double atEdge = expectedDisplacement(0.5);
+    check("right edge dx (-)", displacementAt(kBackdropWidth - 1, kBackdropHeight / 2).first, -atEdge, kPositionEpsilon);
+    check("top edge dy (+)", displacementAt(kBackdropWidth / 2, 0).second, atEdge, kPositionEpsilon);
+    check("bottom edge dy (-)", displacementAt(kBackdropWidth / 2, kBackdropHeight - 1).second, -atEdge, kPositionEpsilon);
+
+    // ---- Interior: every pixel at or beyond edge_falloff from all edges is
+    // an exact copy (samples land on texel centres: no filtering at all). ----
+    int interiorPixels = 0;
+    int interiorMoved = 0;
+    for (int y = 0; y < kBackdropHeight; ++y) {
+        for (int x = 0; x < kBackdropWidth; ++x) {
+            const double edgeDist = std::min(std::min(x + 0.5, kBackdropWidth - (x + 0.5)), std::min(y + 0.5, kBackdropHeight - (y + 0.5)));
+            if (edgeDist < falloffPx) {
+                continue;
+            }
+            ++interiorPixels;
+            const auto [dx, dy] = displacementAt(x, y);
+            if (std::fabs(dx) > 1.0e-4 || std::fabs(dy) > 1.0e-4) {
+                ++interiorMoved;
+            }
+        }
+    }
+    std::printf("BACKDROP INTERIOR: %d pixels, %d displaced %s\n", interiorPixels, interiorMoved,
+                (interiorPixels > 0 && interiorMoved == 0) ? "OK" : "FAIL");
+    if (interiorPixels == 0 || interiorMoved != 0) {
+        allPassed = false;
+    }
+
+    // ---- Premultiplied alpha: an alpha ramp along x with colour exactly
+    // half of alpha (rgb = x*2, a = x*4 bytes: a valid premultiplied 50% grey
+    // at every coverage). Refraction blends neighbouring texels; blending
+    // premultiplied values keeps rgb = a/2 exactly and rgb <= a everywhere --
+    // which a straight-alpha mix would not. ----
+    {
+        std::vector<uint8_t> ramp(static_cast<size_t>(kBackdropWidth) * kBackdropHeight * 4);
+        for (int ty = 0; ty < kBackdropHeight; ++ty) {
+            for (int tx = 0; tx < kBackdropWidth; ++tx) {
+                const size_t offset = (static_cast<size_t>(ty) * kBackdropWidth + tx) * 4;
+                ramp[offset + 0] = static_cast<uint8_t>(tx * 2);
+                ramp[offset + 1] = static_cast<uint8_t>(tx * 2);
+                ramp[offset + 2] = static_cast<uint8_t>(tx * 2);
+                ramp[offset + 3] = static_cast<uint8_t>(tx * 4);
+            }
+        }
+        glBindTexture(GL_TEXTURE_2D, backdropTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kBackdropWidth, kBackdropHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, ramp.data());
+        draw();
+        glReadPixels(0, 0, kBackdropWidth, kBackdropHeight, GL_RGBA, GL_FLOAT, result.data());
+        double worstRatioError = 0.0;
+        bool rgbWithinAlpha = true;
+        for (size_t i = 0; i < result.size(); i += 4) {
+            const double a = result[i + 3];
+            for (size_t channel = 0; channel < 3; ++channel) {
+                worstRatioError = std::max(worstRatioError, std::fabs(result[i + channel] - 0.5 * a));
+                if (result[i + channel] > a + 1.0e-5) {
+                    rgbWithinAlpha = false;
+                }
+            }
+        }
+        // One byte: llvmpipe filters an 8-bit texture in 8-bit fixed point and
+        // rounds each channel independently (observed: exactly 0.5/255), so rgb
+        // can be off by 0.5 and a/2 by 0.25 of a byte. A colour/alpha mix-up
+        // (e.g. treating the copy as straight alpha) would break rgb <= a or
+        // the 1:2 ratio by far more across this 0..252 alpha ramp.
+        const bool ok = rgbWithinAlpha && worstRatioError <= 1.0 / 255.0;
+        std::printf("BACKDROP PREMULTIPLIED: rgb<=a %s, max |rgb - a/2| = %.6f %s\n", rgbWithinAlpha ? "yes" : "NO", worstRatioError,
+                    ok ? "OK" : "FAIL");
+        if (!ok) {
+            allPassed = false;
+        }
+        // The displaced edge texel really is a blend (else this proves nothing):
+        // at the left edge the sample moves inward, so alpha rises above the
+        // edge texel's own 0 bytes.
+        const double edgeAlpha = result[(static_cast<size_t>(kBackdropHeight / 2) * kBackdropWidth + 0) * 4 + 3];
+        std::printf("  left-edge alpha after refraction %.4f (> 0 expected) %s\n", edgeAlpha, edgeAlpha > 0.0 ? "OK" : "FAIL");
+        if (!(edgeAlpha > 0.0)) {
+            allPassed = false;
+        }
+    }
 
     std::printf("\n%s\n", allPassed ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED");
     return allPassed ? EXIT_SUCCESS : EXIT_FAILURE;

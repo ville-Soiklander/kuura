@@ -393,3 +393,140 @@ class TestStrokeTokens:
     def test_real_values_are_independent_of_the_glass_edge(self, tokens_real):
         """Hairline and focus keep 1 and 2 px whatever the Frost edge width is."""
         assert tokens_real["stroke"] == {"hairline": 1.0, "focus": 2.0}
+
+
+class TestDecorationTokens:
+    """decoration.* drives the window title-bar theme; every limit is tested on both sides."""
+
+    @pytest.mark.parametrize("key,value", [
+        ("titlebar_height", 23), ("titlebar_height", 65), ("titlebar_height", "36"), ("titlebar_height", True),
+        ("titlebar_height", 36.5),
+        ("button_diameter", 7), ("button_diameter", 21), ("button_diameter", None), ("button_diameter", 12.5),
+        ("button_spacing", -1), ("button_spacing", 25), ("button_spacing", "8"),
+        ("button_inset", -1), ("button_inset", 33), ("button_inset", False),
+        ("glyph_stroke", 0.4), ("glyph_stroke", 3.1), ("glyph_stroke", "1.2"), ("glyph_stroke", True),
+        ("shadow_size", -1), ("shadow_size", 33), ("shadow_size", 8.5), ("shadow_size", "16"),
+    ])
+    def test_out_of_range_or_wrong_type_is_rejected(self, tokens_real, key, value):
+        """Values just outside the limits, and values of the wrong type, are reported."""
+        mutated = copy.deepcopy(tokens_real)
+        mutated["decoration"][key] = value
+        assert any(e.startswith(f"decoration.{key}") for e in validate(mutated))
+
+    @pytest.mark.parametrize("key,value", [
+        ("titlebar_height", 24), ("titlebar_height", 64),
+        ("button_diameter", 8), ("button_diameter", 20),
+        ("button_spacing", 0), ("button_spacing", 24),
+        ("button_inset", 0), ("button_inset", 32),
+        ("glyph_stroke", 0.5), ("glyph_stroke", 3),
+        ("shadow_size", 0), ("shadow_size", 32),
+    ])
+    def test_range_boundaries_are_accepted(self, tokens_real, key, value):
+        """Both edges of every range are valid."""
+        mutated = copy.deepcopy(tokens_real)
+        mutated["decoration"][key] = value
+        assert validate(mutated) == []
+
+    def test_missing_and_unknown_keys_are_reported(self, tokens_real):
+        """The decoration section is closed: missing and extra keys are errors."""
+        mutated = copy.deepcopy(tokens_real)
+        del mutated["decoration"]["button_spacing"]
+        mutated["decoration"]["bogus"] = 1
+        errors = validate(mutated)
+        assert any("decoration.button_spacing" in e and "missing" in e for e in errors)
+        assert any("decoration.bogus" in e for e in errors)
+
+    def test_missing_section_is_reported(self, tokens_real):
+        """Dropping the whole section fails validation."""
+        mutated = copy.deepcopy(tokens_real)
+        del mutated["decoration"]
+        assert any(e.startswith("decoration") for e in validate(mutated))
+
+    def test_corner_radius_may_equal_but_not_exceed_the_title_bar(self, tokens_real):
+        """radius.window == titlebar_height passes; one more pixel of radius fails."""
+        mutated = copy.deepcopy(tokens_real)
+        mutated["decoration"]["titlebar_height"] = 24
+        mutated["radius"]["window"] = 24
+        assert validate(mutated) == []
+        mutated["radius"]["window"] = 25
+        assert any(e.startswith("radius.window") for e in validate(mutated))
+
+    def test_cross_check_does_not_crash_on_malformed_values(self, tokens_real):
+        """A non-numeric bar height yields only the per-value error, never an exception."""
+        mutated = copy.deepcopy(tokens_real)
+        mutated["decoration"]["titlebar_height"] = "tall"
+        errors = validate(mutated)
+        assert any(e.startswith("decoration.titlebar_height") for e in errors)
+        assert not any(e.startswith("radius.window") for e in errors)
+
+
+class TestLightHairlineTokens:
+    """Tests for the Frost light-surface rim tokens under material.edge_highlight."""
+
+    @staticmethod
+    def _errors_with(tokens_real, key, value):
+        """
+        Validate a copy of the real tokens with one edge_highlight key replaced.
+
+        Args:
+            tokens_real: The real token dictionary (fixture).
+            key: Key inside material.edge_highlight.
+            value: Replacement value.
+
+        Returns:
+            The list of validation errors.
+        """
+        mutated = copy.deepcopy(tokens_real)
+        mutated["material"]["edge_highlight"][key] = value
+        return validate(mutated)
+
+    @pytest.mark.parametrize("key,value", [
+        ("light_hairline_opacity", 0),
+        ("light_hairline_opacity", 1),
+        ("light_hairline_width", 0.5),
+        ("light_hairline_width", 4),
+        ("light_luma_low", 0),
+        ("light_luma_high", 1),
+    ])
+    def test_values_on_the_limit_pass(self, tokens_real, key, value):
+        """Each limit value itself is accepted."""
+        assert self._errors_with(tokens_real, key, value) == []
+
+    @pytest.mark.parametrize("key,value", [
+        ("light_hairline_opacity", -0.01),
+        ("light_hairline_opacity", 1.01),
+        ("light_hairline_width", 0.49),
+        ("light_hairline_width", 4.01),
+        ("light_luma_low", -0.01),
+        ("light_luma_high", 1.01),
+        ("light_hairline_opacity", True),
+        ("light_hairline_width", "1.0"),
+    ])
+    def test_values_beyond_the_limit_fail(self, tokens_real, key, value):
+        """Values just outside each limit (and wrong types) are reported by path."""
+        errors = self._errors_with(tokens_real, key, value)
+        assert any(e.startswith(f"material.edge_highlight.{key}") for e in errors)
+
+    def test_luma_ramp_must_be_strictly_ascending(self, tokens_real):
+        """low < high passes; low == high and low > high fail."""
+        mutated = copy.deepcopy(tokens_real)
+        edge = mutated["material"]["edge_highlight"]
+        edge["light_luma_low"], edge["light_luma_high"] = 0.84, 0.85
+        assert validate(mutated) == []
+        edge["light_luma_low"] = 0.85
+        assert any("light_luma_low" in e for e in validate(mutated))
+        edge["light_luma_low"] = 0.9
+        assert any("light_luma_low" in e for e in validate(mutated))
+
+    def test_missing_key_is_reported(self, tokens_real):
+        """Dropping one of the new keys fails validation."""
+        mutated = copy.deepcopy(tokens_real)
+        del mutated["material"]["edge_highlight"]["light_luma_high"]
+        errors = validate(mutated)
+        assert any("light_luma_high" in e and "missing" in e for e in errors)
+
+    def test_ramp_check_does_not_crash_on_malformed_values(self, tokens_real):
+        """A non-numeric ramp bound yields only the per-value error, never an exception."""
+        errors = self._errors_with(tokens_real, "light_luma_low", "dark")
+        assert any(e.startswith("material.edge_highlight.light_luma_low") for e in errors)
+        assert not any("must be <" in e for e in errors)

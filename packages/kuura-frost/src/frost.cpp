@@ -17,6 +17,12 @@
 // (effect/offscreeneffect.cpp at the pinned tag) -- apply() must reproduce it
 // exactly so the glass rect lands on the same device-pixel grid as the texture.
 #include <core/pixelgrid.h>
+// Backdrop refraction (drawWindow()/refractBackdrop()): the same headers
+// plugins/blur/blur.cpp includes for its own backdrop read and on-screen draw.
+#include <core/rendertarget.h>
+#include <core/renderviewport.h>
+#include <opengl/glframebuffer.h>
+#include <opengl/glvertexbuffer.h>
 
 // The generated tokens.h below is a package-build-time artifact (see
 // design/generators/cpp_header.py and packages/kuura-frost/PKGBUILD's build()),
@@ -28,6 +34,7 @@
 #include <tokens.h>
 
 #include <QImage>
+#include <QMatrix4x4>
 #include <QRandomGenerator>
 #include <QVector2D>
 #include <QVector4D>
@@ -59,6 +66,9 @@
 #include <QDynamicPropertyChangeEvent>
 #include <QWindow>
 
+#include <cmath>
+#include <span>
+
 namespace Kuura
 {
 
@@ -88,6 +98,9 @@ Frost::Frost()
     // throughout its own effect plugins, including blur.cpp.
     connect(KWin::effects, &KWin::EffectsHandler::windowAdded, this, &Frost::slotWindowAdded);
     connect(KWin::effects, &KWin::EffectsHandler::windowDeleted, this, &Frost::slotWindowDeleted);
+    // Backdrop copies are per view (output); free them when one goes away,
+    // as BlurEffect's constructor does with the same signal (blur.cpp).
+    connect(KWin::effects, &KWin::EffectsHandler::viewRemoved, this, &Frost::slotViewRemoved);
 
 #if KWIN_BUILD_X11
     // Mirrors BlurEffect's own constructor exactly (blur.cpp: announce once,
@@ -165,7 +178,7 @@ void Frost::loadShaders()
         return;
     }
 
-    // Upload the five material.* constants (design/tokens.json, via the
+    // Upload the window shader's material.* constants (design/tokens.json, via the
     // package-build-time generated <tokens.h>, see this file's own top-of-file
     // include comment) and fix both sampler uniforms to their real texture
     // units, ONCE, right after linking. See frost.h's apply() docstring
@@ -180,21 +193,15 @@ void Frost::loadShaders()
     KWin::ShaderManager::instance()->pushShader(shader.get());
     shader->setUniform("sampler", 0);
     shader->setUniform("noiseSampler", 1);
-    // WHY the explicit static_cast<float>: material.refraction.edge_falloff is
-    // a JSON INTEGER in design/tokens.json (12, not 12.0), so
-    // design/generators/cpp_header.py -- correctly, since it preserves the
-    // source JSON's own type rather than guessing an intended one -- generates
-    // `kMaterialRefractionEdgeFalloff` as a C++ `int`. The shader declares
-    // `refractionEdgeFalloff` as `float` (frost_shader.h). Passing the raw int
-    // here would resolve to GLShader::setUniform(const char *, int), which
-    // calls glUniform1i() -- a real OpenGL type mismatch against a `float`
-    // uniform (GL_INVALID_OPERATION, value left unset) -- confirmed by reading
-    // every setUniform() overload in opengl/glshader.cpp, not assumed.
-    shader->setUniform("refractionStrength", Kuura::Tokens::kMaterialRefractionStrength);
-    shader->setUniform("refractionEdgeFalloff", static_cast<float>(Kuura::Tokens::kMaterialRefractionEdgeFalloff));
     shader->setUniform("edgeHighlightWidth", Kuura::Tokens::kMaterialEdgeHighlightWidth);
     shader->setUniform("edgeHighlightOpacity", Kuura::Tokens::kMaterialEdgeHighlightOpacity);
     shader->setUniform("noiseAmount", Kuura::Tokens::kMaterialNoise);
+    // Light-surface rim (frost_shader.h, "LIGHT-SURFACE RIM"):
+    // material.edge_highlight.light_* tokens.
+    shader->setUniform("lightRimOpacity", Kuura::Tokens::kMaterialEdgeHighlightLightHairlineOpacity);
+    shader->setUniform("lightRimWidth", Kuura::Tokens::kMaterialEdgeHighlightLightHairlineWidth);
+    shader->setUniform("lightRimLumaLow", Kuura::Tokens::kMaterialEdgeHighlightLightLumaLow);
+    shader->setUniform("lightRimLumaHigh", Kuura::Tokens::kMaterialEdgeHighlightLightLumaHigh);
     // WHY the explicit static_cast<float>: GLTexture::width()/height() return
     // `int` (opengl/gltexture.h) -- an implicit int-to-float argument here
     // would trip cppcoreguidelines-narrowing-conversions (enabled in this
@@ -205,6 +212,30 @@ void Frost::loadShaders()
     KWin::ShaderManager::instance()->popShader();
 
     m_shader = std::move(shader);
+
+    // Backdrop refraction pass (drawWindow()). MapTexture only: it samples
+    // Frost's backdrop copy and writes it back unmodulated (no opacity or
+    // brightness applies to the backdrop; Blur's own on-screen pass already
+    // applied the window opacity to what was copied). A link failure only
+    // disables backdrop refraction -- the window material above still works.
+    std::unique_ptr<KWin::GLShader> backdropShader = KWin::ShaderManager::instance()->generateCustomShader(
+        KWin::ShaderTrait::MapTexture, QByteArray(), QByteArray(Kuura::kFrostBackdropFragmentShaderSource));
+    if (backdropShader) {
+        KWin::ShaderManager::instance()->pushShader(backdropShader.get());
+        backdropShader->setUniform("sampler", 0);
+        backdropShader->setUniform("refractionStrength", Kuura::Tokens::kMaterialRefractionStrength);
+        // WHY the explicit static_cast<float>: material.refraction.edge_falloff
+        // is a JSON INTEGER in design/tokens.json (12, not 12.0), so
+        // design/generators/cpp_header.py -- preserving the source JSON's type
+        // -- generates `kMaterialRefractionEdgeFalloff` as a C++ `int`. Passing
+        // it raw would resolve to GLShader::setUniform(const char *, int), i.e.
+        // glUniform1i() on a `float` uniform (GL_INVALID_OPERATION, value left
+        // unset) -- confirmed from the setUniform() overloads in
+        // opengl/glshader.cpp.
+        backdropShader->setUniform("refractionEdgeFalloff", static_cast<float>(Kuura::Tokens::kMaterialRefractionEdgeFalloff));
+        KWin::ShaderManager::instance()->popShader();
+        m_backdropShader = std::move(backdropShader);
+    }
 }
 
 bool Frost::generateNoiseTexture()
@@ -303,6 +334,26 @@ void Frost::slotWindowDeleted(KWin::EffectWindow *window)
         m_surfaceBlurChangedConnections.erase(it);
     }
     m_glassRects.remove(window);
+    m_glassRegions.remove(window);
+    dropBackdropCopies(window);
+}
+
+void Frost::slotViewRemoved(KWin::RenderView *view)
+{
+    for (auto &[window, perView] : m_backdropCopies) {
+        if (auto it = perView.find(view); it != perView.end()) {
+            KWin::effects->makeOpenGLContextCurrent();
+            perView.erase(it);
+        }
+    }
+}
+
+void Frost::dropBackdropCopies(KWin::EffectWindow *window)
+{
+    if (auto it = m_backdropCopies.find(window); it != m_backdropCopies.end()) {
+        KWin::effects->makeOpenGLContextCurrent();
+        m_backdropCopies.erase(it);
+    }
 }
 
 void Frost::setupDecorationConnections(KWin::EffectWindow *window)
@@ -351,15 +402,16 @@ void Frost::slotPropertyNotify(KWin::EffectWindow *window, long atom)
 }
 #endif
 
-std::optional<QRectF> Frost::glassBoundingRect(KWin::EffectWindow *window) const
+std::optional<KWin::RegionF> Frost::glassRegion(KWin::EffectWindow *window) const
 {
     // Mirrors BlurEffect::updateBlurRegion() + BlurEffect::blurRegion()
     // (blur.cpp at the pinned tag) source by source, so Frost's glass rect is
-    // exactly the bounding box of the area Blur frosts -- the two effects must
-    // agree on WHERE the glass is, or the highlight would float off the
-    // blurred shape. Only the bounding box is kept: the shader works on one
-    // rectangle, and rounded corners inside it are handled by the captured
-    // texture's own alpha (frost_shader.h).
+    // exactly the area Blur frosts -- the two effects must agree on WHERE the
+    // glass is, or the highlight would float off the blurred shape and the
+    // backdrop refraction would write outside it. The window shader uses
+    // only the bounding box (rounded corners inside it are handled by the
+    // captured texture's own alpha, frost_shader.h); refractBackdrop() clips
+    // to the full region.
     std::optional<KWin::RegionF> content;
     std::optional<KWin::RegionF> frame;
 
@@ -428,7 +480,7 @@ std::optional<QRectF> Frost::glassBoundingRect(KWin::EffectWindow *window) const
     if (frame.has_value()) {
         region += frame.value();
     }
-    return QRectF(region.boundingRect());
+    return region;
 }
 
 void Frost::updateWindowState(KWin::EffectWindow *window)
@@ -437,10 +489,11 @@ void Frost::updateWindowState(KWin::EffectWindow *window)
     // glassBoundingRect()); the rect itself is cached here, on the change
     // signals, rather than recomputed every frame in apply(), because the X11
     // branch is a server round-trip.
-    const std::optional<QRectF> glassRect = glassBoundingRect(window);
+    const std::optional<KWin::RegionF> region = glassRegion(window);
 
-    if (glassRect.has_value()) {
-        m_glassRects.insert(window, *glassRect);
+    if (region.has_value()) {
+        m_glassRects.insert(window, QRectF(region->boundingRect()));
+        m_glassRegions.insert(window, *region);
         redirect(window);
         setShader(window, m_shader.get());
         // DELIBERATELY NOT setting WindowForceBlurRole any more (an earlier
@@ -453,6 +506,8 @@ void Frost::updateWindowState(KWin::EffectWindow *window)
         // own it.
     } else {
         m_glassRects.remove(window);
+        m_glassRegions.remove(window);
+        dropBackdropCopies(window);
         unredirect(window);
     }
 }
@@ -510,6 +565,213 @@ void Frost::apply(KWin::EffectWindow *window, int mask, KWin::WindowPaintData &d
     glActiveTexture(GL_TEXTURE1);
     m_noiseTexture->bind();
     glActiveTexture(GL_TEXTURE0);
+}
+
+void Frost::prePaintScreen(KWin::ScreenPrePaintData &data)
+{
+    // Mirrors BlurEffect::prePaintScreen() (blur.cpp): remember the view, then
+    // forward down the chain.
+    m_currentView = data.view;
+    KWin::effects->prePaintScreen(data);
+}
+
+void Frost::drawWindow(const KWin::RenderTarget &renderTarget, const KWin::RenderViewport &viewport, KWin::EffectWindow *window,
+                       int mask, const KWin::Region &deviceRegion, KWin::WindowPaintData &data)
+{
+    // Order is the whole point (see the docstring in frost.h): Blur's output
+    // is on renderTarget now, the window is not yet. Refract first, then let
+    // the base class composite the window over the refracted backdrop.
+    refractBackdrop(renderTarget, viewport, window, mask, deviceRegion, data);
+    KWin::OffscreenEffect::drawWindow(renderTarget, viewport, window, mask, deviceRegion, data);
+}
+
+bool Frost::backdropIsBlurred(const KWin::EffectWindow *window, int mask, const KWin::WindowPaintData &data) const
+{
+    // BlurEffect::isActive(): Blur does not run while the screen is locked.
+    // "blur" is Blur's plugin id (its metadata.json), the name
+    // EffectsHandler::isEffectLoaded() compares against.
+    if (KWin::effects->isScreenLocked() || !KWin::effects->isEffectLoaded(QStringLiteral("blur"))) {
+        return false;
+    }
+    // The rest is BlurEffect::shouldBlur() verbatim in logic, including its
+    // "scaled" test requiring BOTH axes to differ from 1 -- Frost must refract
+    // exactly when Blur blurred, not when it "should have".
+    const bool forced = window->data(KWin::WindowForceBlurRole).toBool();
+    if (KWin::effects->activeFullScreenEffect() && !forced) {
+        return false;
+    }
+    if (window->isDesktop()) {
+        return false;
+    }
+    const bool scaled = !qFuzzyCompare(data.xScale(), 1.0) && !qFuzzyCompare(data.yScale(), 1.0);
+    const bool translated = !qFuzzyIsNull(data.xTranslation()) || !qFuzzyIsNull(data.yTranslation());
+    if ((scaled || translated || (mask & KWin::Effect::PAINT_WINDOW_TRANSFORMED) != 0) && !forced) {
+        return false;
+    }
+    // Blur draws its backdrop with modulation opacity^2 (blur.cpp); at zero
+    // there is no frosted backdrop to refract.
+    return window->opacity() * data.opacity() > 0.0;
+}
+
+void Frost::refractBackdrop(const KWin::RenderTarget &renderTarget, const KWin::RenderViewport &viewport, KWin::EffectWindow *window,
+                            int mask, const KWin::Region &deviceRegion, const KWin::WindowPaintData &data)
+{
+    if (!m_backdropShader) {
+        return;
+    }
+    const auto regionIt = m_glassRegions.constFind(window);
+    if (regionIt == m_glassRegions.constEnd() || !backdropIsBlurred(window, mask, data)) {
+        return;
+    }
+
+    // ---- Glass shape in global logical coordinates: BlurEffect::blur()'s
+    // exact transform (scale, then translation, then window position), so a
+    // sliding popup's band moves with Blur's backdrop. ----
+    KWin::RegionF shape = *regionIt;
+    if (!qFuzzyCompare(data.xScale(), 1.0) || !qFuzzyCompare(data.yScale(), 1.0)) {
+        shape.scale(data.xScale(), data.yScale());
+    }
+    if (!qFuzzyIsNull(data.xTranslation()) || !qFuzzyIsNull(data.yTranslation())) {
+        shape.translate(data.xTranslation(), data.yTranslation());
+    }
+    shape.translate(window->pos());
+
+    const KWin::Rect backgroundRect = shape.boundingRect().rounded();
+    const qreal scale = viewport.scale();
+    const KWin::Rect scaledBackgroundRect = backgroundRect.scaled(scale).rounded();
+    const KWin::Rect deviceBackgroundRect = viewport.mapToDeviceCoordinates(backgroundRect).rounded();
+    if (scaledBackgroundRect.isEmpty()) {
+        return;
+    }
+
+    // ---- The band that can change: within edge_falloff of the bbox edge the
+    // displacement is non-zero; +1 px covers the falloff's last fractional
+    // pixel. Everything here is bbox-local DEVICE pixels, top-left origin,
+    // which is the coordinate frame Blur's on-screen pass uses too. ----
+    const float falloff = static_cast<float>(Kuura::Tokens::kMaterialRefractionEdgeFalloff);
+    const int bandDevice = static_cast<int>(std::ceil(falloff)) + 1;
+    const KWin::Rect localDeviceRect(0, 0, scaledBackgroundRect.width(), scaledBackgroundRect.height());
+    KWin::Region band(localDeviceRect);
+    if (const KWin::Rect inner = localDeviceRect.adjusted(bandDevice, bandDevice, -bandDevice, -bandDevice); !inner.isEmpty()) {
+        band -= inner;
+    }
+    // Only inside the blur shape (never in a rounded popup's cut-off corner,
+    // where the screen shows the sharp desktop) and only inside the repaint.
+    KWin::Region shapeDevice;
+    for (const KWin::RectF &rect : shape.rects()) {
+        shapeDevice |= rect.translated(-backgroundRect.topLeft()).scaled(scale).rounded();
+    }
+    KWin::Region effective = shapeDevice & band;
+    if (deviceRegion != KWin::Region::infinite()) {
+        effective &= deviceRegion.translated(-deviceBackgroundRect.topLeft());
+    }
+    if (effective.isEmpty()) {
+        return;
+    }
+
+    // ---- Per-window, per-view backdrop copy (see BackdropCopy in frost.h).
+    // Same format rule as BlurEffect::blur(): match the target's own format so
+    // the round trip is lossless (e.g. a 10-bit or float HDR target). ----
+    BackdropCopy &copy = m_backdropCopies[window][m_currentView];
+    const GLenum textureFormat = renderTarget.texture() ? renderTarget.texture()->internalFormat() : GL_RGBA8;
+    const QSize copySize(scaledBackgroundRect.width(), scaledBackgroundRect.height());
+    bool fresh = false;
+    if (!copy.texture || copy.texture->size() != copySize || copy.texture->internalFormat() != textureFormat) {
+        copy.framebuffer.reset();
+        copy.texture = KWin::GLTexture::allocate(textureFormat, copySize);
+        if (!copy.texture) {
+            return;
+        }
+        copy.texture->setFilter(GL_LINEAR);
+        copy.texture->setWrapMode(GL_CLAMP_TO_EDGE);
+        copy.framebuffer = std::make_unique<KWin::GLFramebuffer>(copy.texture.get());
+        if (!copy.framebuffer->valid()) {
+            copy.framebuffer.reset();
+            copy.texture.reset();
+            return;
+        }
+        fresh = true;
+    }
+
+    // ---- Read Blur's output: the repainted part of the band only, exactly
+    // BlurEffect::blur()'s "Fetch the pixels behind the shape" loop. Logical
+    // source rects, device destination rects (this copy is device-sized,
+    // unlike Blur's logical-sized one, so the refracted band keeps full
+    // resolution at scale > 1). The band is widened by one more logical pixel
+    // than it is drawn: an inward sample at the band's inner edge reads up to
+    // one texel further in. ----
+    const int bandLogical = static_cast<int>(std::ceil((bandDevice + 1) / scale));
+    KWin::Region bandLogicalRegion(backgroundRect);
+    if (const KWin::Rect inner = backgroundRect.adjusted(bandLogical, bandLogical, -bandLogical, -bandLogical); !inner.isEmpty()) {
+        bandLogicalRegion -= inner;
+    }
+    const KWin::Region dirtyRegion = viewport.mapFromDeviceCoordinatesContained(deviceRegion) & bandLogicalRegion;
+    for (const KWin::Rect &dirtyRect : dirtyRegion.rects()) {
+        copy.framebuffer->blitFromRenderTarget(renderTarget, viewport, dirtyRect,
+                                               dirtyRect.translated(-backgroundRect.topLeft()).scaled(scale).rounded());
+    }
+    // A freshly allocated copy holds nothing outside what was just blitted.
+    // Sampling it there would write undefined texels into the backdrop, so
+    // draw only if this frame repainted the whole band -- the normal case,
+    // since a new copy follows a map or resize, and both damage the whole
+    // window. Otherwise the band is skipped for one frame (no refraction,
+    // never garbage).
+    if (fresh && !(bandLogicalRegion - dirtyRegion).isEmpty()) {
+        return;
+    }
+
+    // ---- Draw the band back, displaced. Vertex layout, texcoord convention
+    // (v = 1 - y / height) and projection (viewport projection translated to
+    // the scaled bbox) are those of BlurEffect::blur()'s on-screen pass. ----
+    KWin::GLVertexBuffer *vbo = KWin::GLVertexBuffer::streamingBuffer();
+    vbo->reset();
+    vbo->setAttribLayout(std::span(KWin::GLVertexBuffer::GLVertex2DLayout), sizeof(KWin::GLVertex2D));
+    const int vertexCount = static_cast<int>(effective.rects().size()) * 6;
+    const auto mapped = vbo->map<KWin::GLVertex2D>(static_cast<size_t>(vertexCount));
+    if (!mapped) {
+        return;
+    }
+    {
+        auto vertices = *mapped;
+        size_t index = 0;
+        const auto width = static_cast<float>(copySize.width());
+        const auto height = static_cast<float>(copySize.height());
+        for (const KWin::Rect &rect : effective.rects()) {
+            const auto x0 = static_cast<float>(rect.x());
+            const auto y0 = static_cast<float>(rect.y());
+            const auto x1 = static_cast<float>(rect.x() + rect.width());
+            const auto y1 = static_cast<float>(rect.y() + rect.height());
+            const auto vertex = [width, height](float x, float y) {
+                return KWin::GLVertex2D{.position = QVector2D(x, y), .texcoord = QVector2D(x / width, 1.0F - y / height)};
+            };
+            // Two triangles per rect, same winding as blur.cpp.
+            vertices[index++] = vertex(x0, y0);
+            vertices[index++] = vertex(x1, y1);
+            vertices[index++] = vertex(x0, y1);
+            vertices[index++] = vertex(x0, y0);
+            vertices[index++] = vertex(x1, y0);
+            vertices[index++] = vertex(x1, y1);
+        }
+    }
+    vbo->unmap();
+    vbo->bindArrays();
+
+    KWin::ShaderManager::instance()->pushShader(m_backdropShader.get());
+    QMatrix4x4 projectionMatrix = viewport.projectionMatrix();
+    projectionMatrix.translate(static_cast<float>(scaledBackgroundRect.x()), static_cast<float>(scaledBackgroundRect.y()));
+    m_backdropShader->setUniform(KWin::GLShader::Mat4Uniform::ModelViewProjectionMatrix, projectionMatrix);
+    m_backdropShader->setUniform("backdropSize", QVector2D(static_cast<float>(copySize.width()), static_cast<float>(copySize.height())));
+
+    // Blending OFF: the band REPLACES the backdrop with its displaced copy
+    // (alpha included; see the shader's own comment on premultiplication).
+    glDisable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE0);
+    copy.texture->bind();
+    vbo->draw(GL_TRIANGLES, 0, vertexCount);
+    copy.texture->unbind();
+
+    KWin::ShaderManager::instance()->popShader();
+    vbo->unbindArrays();
 }
 
 } // namespace Kuura

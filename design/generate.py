@@ -18,6 +18,7 @@ seven mode-independent layout/header/fontconfig/kwin/calamares files):
     layout/plasmashellrc                                         (generators.plasma_layout.render_view_settings)
     layout/kactivitymanagerdrc                                   (generators.plasma_layout.render_activities)
     cpp/tokens.h                                                 (generators.cpp_header.render)
+    cpp/token_colors.h                                           (generators.cpp_header.render_colors)
     fontconfig/<name>-fonts.conf                                 (generators.fontconfig.render)
     kwin/slidingpopups.ini                                       (generators.kwin_motion.render_slidingpopups_fragment)
     calamares/branding.desc                                      (generators.calamares_branding.render)
@@ -49,15 +50,15 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
         name: Theme name passed to the generators and used in file names.
 
     Returns:
-        The paths of all written files, sorted, always 15 entries: the 4
+        The paths of all written files, sorted, always 16 entries: the 4
         mode-dependent generators below times 2 modes (light/dark), plus three
         mode-independent panel layout files (layout has no light/dark
         variant, so generators.plasma_layout's three functions are each called
         once, not per mode: render() for the appletsrc, render_view_settings()
         for the panel thickness/floating settings appletsrc cannot express, and
         render_activities() for the matching activity id - see plasma_layout's
-        own module docstring for why there are three), plus ONE mode-independent
-        C++ token header (generators.cpp_header.render() - colour tokens are
+        own module docstring for why there are three), plus TWO mode-independent
+        C++ token headers (generators.cpp_header.render() and render_colors() - colour tokens are
         mode-dependent and that generator's locked signature takes no mode
         argument at all, see its own module docstring, so like plasma_layout it
         is rendered once, not per mode), plus ONE mode-independent fontconfig
@@ -181,6 +182,12 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
     tokens_header_path = cpp_subdir / "tokens.h"
     tokens_header_path.write_text(cpp_header.render(tokens), encoding="utf-8")
     written_paths.append(tokens_header_path)
+
+    # Per-mode colour constants for native code (packages/kuura-decoration): a second
+    # header, because tokens.h is mode-independent and must stay byte-identical.
+    colors_header_path = cpp_subdir / "token_colors.h"
+    colors_header_path.write_text(cpp_header.render_colors(tokens), encoding="utf-8", newline="\n")
+    written_paths.append(colors_header_path)
 
     # Fontconfig alias: mode-independent like the two blocks above, but DOES take
     # `name` (the alias family itself is branded per distro, e.g. "Kuura Sans") -

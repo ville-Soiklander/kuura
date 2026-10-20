@@ -1,0 +1,13 @@
+{
+    "KPlugin": {
+        "Id": "@KUURA_DECORATION_PLUGIN_ID@",
+        "Name": "@KUURA_DECORATION_DISPLAY_NAME@",
+        "Description": "Round title-bar buttons, follows the colour scheme",
+        "License": "GPL-3.0-or-later",
+        "EnabledByDefault": true
+    },
+    "org.kde.kdecoration3": {
+        "blur": false,
+        "recommendedBorderSize": "Normal"
+    }
+}

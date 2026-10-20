@@ -18,6 +18,8 @@ Rules (path -> constraint). "number" means int or float but never bool.
 - material.blur_radius: number 0..200; material.noise: number 0..1
 - material.bg_opacity.panel|menu|sidebar|modal: number 0..1
 - material.edge_highlight.opacity: 0..1; .width: 0..8
+- material.edge_highlight.light_hairline_opacity: 0..1; .light_hairline_width: 0.5..4 (device px);
+  .light_luma_low and .light_luma_high: 0..1 and light_luma_low < light_luma_high (strict)
 - material.inner_shadow.opacity: 0..1; .blur: 0..50
 - material.refraction.strength: 0..0.5; .edge_falloff: 0..100
 - spacing.grid: int 1..16; spacing.gutter: int 0..64; spacing.section: int 0..128
@@ -29,6 +31,13 @@ Rules (path -> constraint). "number" means int or float but never bool.
 - motion.duration.instant|fast|base|slow: int 1..5000 and instant <= fast <= base <= slow
 - motion.easing_standard: "cubic-bezier(a, b, c, d)" with four numbers, a and c in 0..1
 - motion.easing_spring.mass|stiffness|damping: number > 0
+- decoration.titlebar_height: int 24..64; decoration.button_diameter: int 8..20;
+  decoration.button_spacing: int 0..24; decoration.button_inset: int 0..32;
+  decoration.glyph_stroke: number 0.5..3; decoration.shadow_size: int 0..32
+  (0 = no drop shadow). Cross-field: radius.window must not
+  exceed decoration.titlebar_height (the rounded top corner is drawn inside the
+  title bar). The button diameter needs no cross-check: its maximum (20) is below
+  the minimum bar height (24) by construction.
 - panel.menubar_height: int 16..64; panel.shelf_icon: int 16..128;
   panel.shelf_margin: int 0..64; panel.shelf_hover_scale: number 1.0..2.5
 - color.light and color.dark: both objects with EXACTLY the same 20 keys:
@@ -63,6 +72,9 @@ _RULES = {
     "material.bg_opacity.panel": ("number", 0, 1), "material.bg_opacity.menu": ("number", 0, 1),
     "material.bg_opacity.sidebar": ("number", 0, 1), "material.bg_opacity.modal": ("number", 0, 1),
     "material.edge_highlight.opacity": ("number", 0, 1), "material.edge_highlight.width": ("number", 0, 8),
+    "material.edge_highlight.light_hairline_opacity": ("number", 0, 1),
+    "material.edge_highlight.light_hairline_width": ("number", 0.5, 4),
+    "material.edge_highlight.light_luma_low": ("number", 0, 1), "material.edge_highlight.light_luma_high": ("number", 0, 1),
     "material.inner_shadow.opacity": ("number", 0, 1), "material.inner_shadow.blur": ("number", 0, 50),
     "material.refraction.strength": ("number", 0, 0.5), "material.refraction.edge_falloff": ("number", 0, 100),
     "spacing.grid": ("int", 1, 16), "spacing.gutter": ("int", 0, 64), "spacing.section": ("int", 0, 128),
@@ -77,6 +89,9 @@ _RULES = {
     "motion.duration.base": ("int", 1, 5000), "motion.duration.slow": ("int", 1, 5000),
     "motion.easing_standard": ("cubic_bezier",), "motion.easing_spring.mass": ("positive",),
     "motion.easing_spring.stiffness": ("positive",), "motion.easing_spring.damping": ("positive",),
+    "decoration.titlebar_height": ("int", 24, 64), "decoration.button_diameter": ("int", 8, 20),
+    "decoration.button_spacing": ("int", 0, 24), "decoration.button_inset": ("int", 0, 32),
+    "decoration.glyph_stroke": ("number", 0.5, 3), "decoration.shadow_size": ("int", 0, 32),
     "panel.menubar_height": ("int", 16, 64), "panel.shelf_icon": ("int", 16, 128),
     "panel.shelf_margin": ("int", 0, 64), "panel.shelf_hover_scale": ("number", 1.0, 2.5),
     "icon.gradient.top": ("hex_color",), "icon.gradient.bottom": ("hex_color",),
@@ -87,7 +102,8 @@ _NESTED = {
     "icon.gradient": {"top", "bottom"},
     "icon.glass_edge": {"opacity", "width"},
     "material.bg_opacity": {"panel", "menu", "sidebar", "modal"},
-    "material.edge_highlight": {"opacity", "width"},
+    "material.edge_highlight": {"opacity", "width", "light_hairline_opacity", "light_hairline_width",
+                                "light_luma_low", "light_luma_high"},
     "material.inner_shadow": {"opacity", "blur"},
     "material.refraction": {"strength", "edge_falloff"},
     "type.size": {"caption", "body", "title", "header"},
@@ -119,6 +135,7 @@ _SECTIONS = {
     "stroke": {"hairline", "focus"},
     "type": {"family_ui", "family_mono", "size", "weight", "tracking"},
     "motion": {"duration", "easing_standard", "easing_spring"},
+    "decoration": {"titlebar_height", "button_diameter", "button_spacing", "button_inset", "glyph_stroke", "shadow_size"},
     "panel": {"menubar_height", "shelf_icon", "shelf_margin", "shelf_hover_scale"},
     "color": {"light", "dark"},
 }
@@ -196,6 +213,59 @@ def _validate_value(value: object, rule: tuple, path: str) -> list[str]:
     return errors
 
 
+def _validate_decoration_geometry(tokens: dict) -> list[str]:
+    """
+    Check the cross-field limits of the window-decoration geometry.
+
+    WHY: each decoration value is range-checked on its own, but the rounded top
+    corner (radius.window) is drawn inside the title bar, so it cannot be taller than
+    the bar. (The round buttons always fit: the diameter maximum 20 is below the bar
+    minimum 24.)
+
+    Args:
+        tokens: Parsed token dictionary (may be malformed; nothing is raised).
+
+    Returns:
+        Error messages; empty when the values are missing/invalid (those are reported
+        by the per-value rules) or fit together.
+    """
+    deco = tokens.get("decoration")
+    if not isinstance(deco, dict):
+        return []
+    bar = deco.get("titlebar_height")
+    errors = []
+    radius = tokens.get("radius")
+    window_radius = radius.get("window") if isinstance(radius, dict) else None
+    if _is_number(bar) and _is_number(window_radius) and window_radius > bar:
+        errors.append(f"radius.window: must not exceed decoration.titlebar_height ({bar}), got {window_radius}")
+    return errors
+
+
+def _validate_light_luma_ramp(tokens: dict) -> list[str]:
+    """
+    Check that the light-surface luma ramp of the Frost rim is well formed.
+
+    WHY: the shader blends with smoothstep(low, high, luma); smoothstep is undefined
+    when low >= high, so the ramp must be strictly ascending.
+
+    Args:
+        tokens: Parsed token dictionary (may be malformed; nothing is raised).
+
+    Returns:
+        One error message when both values are numbers and low >= high, else empty
+        (missing/invalid values are reported by the per-value rules).
+    """
+    material = tokens.get("material")
+    edge = material.get("edge_highlight") if isinstance(material, dict) else None
+    if not isinstance(edge, dict):
+        return []
+    low = edge.get("light_luma_low")
+    high = edge.get("light_luma_high")
+    if _is_number(low) and _is_number(high) and low >= high:
+        return [f"material.edge_highlight: light_luma_low ({low}) must be < light_luma_high ({high})"]
+    return []
+
+
 def validate(tokens: dict) -> list[str]:
     """
     Check a parsed token dictionary.
@@ -214,7 +284,7 @@ def validate(tokens: dict) -> list[str]:
         return ["tokens must be a dictionary"]
 
     # Validate non-color sections
-    for section in ["radius", "icon", "material", "spacing", "stroke", "type", "motion", "panel"]:
+    for section in ["radius", "icon", "material", "spacing", "stroke", "type", "motion", "decoration", "panel"]:
         if section not in tokens:
             errors.append(f"{section}: missing or not a dict")
             continue
@@ -267,6 +337,9 @@ def validate(tokens: dict) -> list[str]:
 
             elif path in _RULES:
                 errors.extend(_validate_value(value, _RULES[path], path))
+
+    errors.extend(_validate_decoration_geometry(tokens))
+    errors.extend(_validate_light_luma_ramp(tokens))
 
     # Validate color section
     if "color" not in tokens:

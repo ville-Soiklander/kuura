@@ -12,9 +12,9 @@ from design.generate import generate, main
 class TestGenerate:
     """Tests for generate() function."""
 
-    def test_generate_writes_fifteen_files(self, tmp_path):
-        """generate() should write exactly 15 files: 4 generators x 2 modes, plus 3
-        mode-independent layout files, plus 1 mode-independent C++ header, plus 1
+    def test_generate_writes_sixteen_files(self, tmp_path):
+        """generate() should write exactly 16 files: 4 generators x 2 modes, plus 3
+        mode-independent layout files, plus 2 mode-independent C++ headers, plus 1
         mode-independent fontconfig alias, plus 1 mode-independent kwin sliding-popups
         ini fragment, plus 1 mode-independent Calamares branding descriptor."""
         from design.validate import load_tokens
@@ -31,8 +31,8 @@ class TestGenerate:
              patch("design.generators.cpp_header.render", return_value="// header output\n"):
             result = generate(tokens, tmp_path, "test_theme")
 
-        # Verify exactly 15 files were created
-        assert len(result) == 15, f"Expected 15 files, got {len(result)}: {result}"
+        # Verify exactly 16 files were created
+        assert len(result) == 16, f"Expected 16 files, got {len(result)}: {result}"
 
         # Verify all files exist
         for path in result:
@@ -115,7 +115,7 @@ class TestGenerate:
                  patch("design.generators.plasma_layout.render", return_value="layout output\n"), \
                  patch("design.generators.cpp_header.render", return_value="// header output\n"):
                 result = generate(tokens, tmp_path, valid_name)
-                assert len(result) == 15
+                assert len(result) == 16
 
     def test_generate_calls_all_six_generators(self, tmp_path):
         """generate() should call all six generator.render() functions."""
@@ -255,7 +255,7 @@ class TestMain:
         assert out_dir.exists(), "Output directory should be created"
         # Verify files were written (only count files, not directories)
         files = [p for p in out_dir.rglob("*") if p.is_file()]
-        assert len(files) == 15, f"Expected 15 files, got {len(files)}: {files}"
+        assert len(files) == 16, f"Expected 16 files, got {len(files)}: {files}"
 
     def test_main_default_tokens_path(self, tmp_path):
         """main() should use default tokens.json if not specified."""
@@ -466,8 +466,8 @@ class TestEndToEnd:
         # If all generators are implemented, run the end-to-end test
         result = generate(tokens, tmp_path, "e2e_theme")
 
-        # Verify 15 files were created
-        assert len(result) == 15
+        # Verify 16 files were created
+        assert len(result) == 16
         for path in result:
             assert path.exists(), f"File not created: {path}"
             # Verify file is not empty and ends with newline

@@ -8,7 +8,7 @@
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-desktop"
 pkgver=0.1.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Desktop metapackage: KDE Plasma session with Wayland, audio, network and fonts"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
@@ -84,6 +84,10 @@ depends=(
     # sets EnabledByDefault, so no kwinrc [Plugins] entry is needed. Built from the
     # same DISTRO_NAME variable as this package's own name.
     "${DISTRO_NAME}-frost"
+    # Own KDecoration3 window-decoration plugin (round buttons, four rounded corners,
+    # own shadow). kwinrc selects it by plugin id; KWin falls back to Breeze if it
+    # fails to load. Built from the same DISTRO_NAME variable as this package's name.
+    "${DISTRO_NAME}-decoration"
     # Audio and network applets
     'plasma-nm'
     'plasma-pa'

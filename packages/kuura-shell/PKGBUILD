@@ -23,7 +23,7 @@
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-shell"
 pkgver=0.1.0
-pkgrel=4
+pkgrel=5
 pkgdesc="Desktop shell theming: panel layout, KWin tuning, shortcuts, Kvantum, GTK3 and GTK4 theme (plus the GTK_THEME session env fix that makes GTK4 actually load it)"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
@@ -181,9 +181,13 @@ package() {
     # is safe because ini files merge cleanly by distinct section - kdeglobals's own
     # header comment in this same package already relies on this exact fact for a
     # different future key.
+    # The skel kwinrc also names the window-decoration plugin id, which carries the
+    # product name (its library= value holds the same placeholder as the skel templates
+    # below), so it is passed through the same plain sed substitution.
     local kwinrc_tmp
     kwinrc_tmp="$(mktemp)"
-    cat "$skel/.config/kwinrc" "$generated/kwin/slidingpopups.ini" > "$kwinrc_tmp"
+    cat "$skel/.config/kwinrc" "$generated/kwin/slidingpopups.ini" \
+        | sed "s/@NAME@/${DISTRO_NAME}/g" > "$kwinrc_tmp"
     install -Dm644 "$kwinrc_tmp" "$pkgdir/etc/skel/.config/kwinrc"
     rm -f "$kwinrc_tmp"
     install -Dm644 "$skel/.config/kglobalshortcutsrc" \

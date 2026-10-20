@@ -32,6 +32,23 @@
 # Order is left to right: close, minimize, maximize. The right side is empty and no
 # application-menu (M) button is listed, because the project's visual language has none.
 #
+# ---- Round "traffic-light" buttons: our own C++ decoration plugin (same group) ----
+# The stock decoration cannot change button shape or colour, so the desktop ships its own
+# KDecoration3 plugin (packages/kuura-decoration, pulled in by kuura-desktop). It replaced
+# an earlier Aurorae QML theme because QML cannot round the BOTTOM window corners; the C++
+# plugin can (setBorderRadius), and it draws its own shadow and buttons from the design
+# tokens.
+#   library = plugin id of that plugin: DISTRO_NAME + ".decoration". The product-name
+#             placeholder inside the value is substituted by the package build
+#             (packages/kuura-shell/PKGBUILD) with DISTRO_NAME.
+# No `theme=` key: that key only selects a theme inside the Aurorae engine; a plugin with
+# a single look needs none.
+# If the plugin fails to load, KWin falls back to Breeze (the [Windeco] group below then
+# applies), so a broken plugin never leaves windows without a title bar.
+# ONE look for both colour modes: the plugin reads title-bar and caption colours from the
+# active colour scheme at run time, so switching the scheme restyles it with no further
+# step (docs/SHELL_CONTRACT.md, "Window decoration").
+#
 # ---- Border size (same group) ----
 # KWin 6.7.5 still uses this LEGACY group name (not a new "kdecoration3" one) for the
 # decoration's border-size choice - confirmed live: the "Window Decorations" KCM
@@ -40,7 +57,9 @@
 # the KCM's default entry, labelled "Theme default (No window borders)" (see the
 # CAVEAT below - this entry's name is a real, visible symptom of the open issue).
 #
-# ---- Corner rounding [Windeco] ----
+# ---- Corner rounding [Windeco] (stock Breeze decoration only) ----
+# Our own decoration plugin rounds all four corners from radius.window; this group is
+# read only by Breeze and is kept as the fallback if the plugin is unavailable.
 # RoundedCorners is the ONLY corner-radius lever the stock Breeze decoration exposes.
 # Confirmed by scanning the compiled decoration plugin and its KCM
 # (kcm_breezedecoration.so, org.kde.breeze.so) for every config-key-shaped string:
@@ -48,12 +67,9 @@
 # pixel-radius key and NO material/inner-shadow key anywhere in either binary.
 # This boolean only toggles Breeze's own small, fixed corner radius (a few px) on or
 # off - it CANNOT reach design/tokens.json's radius.window=14 or the
-# material.inner_shadow values. Reaching those needs a bespoke Aurorae theme (KWin's
-# XML+SVG decoration format: new SVG assets, materially more work than a config
-# file). Per docs/SHELL_CONTRACT.md's own instruction, that is NOT built here - it is
-# reported as a scope question for the orchestrator/owner to decide on, not guessed
-# or hand-rolled. RoundedCorners=true is still set because it is the correct,
-# directionally-right, zero-cost choice while that decision is pending.
+# material.inner_shadow values; that is why the own plugin above exists.
+# RoundedCorners=true is kept because it is the correct, zero-cost choice for the
+# Breeze fallback.
 #
 # ---- Resolved caveat (2026-10-20) ----
 # Earlier revisions reported that no key here changed the rendered titlebar. The cause
@@ -65,6 +81,7 @@
 [org.kde.kdecoration2]
 ButtonsOnLeft=XIA
 ButtonsOnRight=
+library=@NAME@.decoration
 BorderSizeAuto=false
 
 [Windeco]

@@ -4,6 +4,9 @@
 // pinned Arch snapshot's kwin package (V4 investigation notes) -- NOT the
 // older kwineffects/ path an older KWin version used.
 #include <effect/offscreeneffect.h>
+// KWin::Region / KWin::RegionF (src/core/region.h at the pinned tag), held by
+// value in the members below.
+#include <core/region.h>
 
 #include <QHash>
 #include <QMap>
@@ -12,6 +15,7 @@
 
 #include <memory>
 #include <optional>
+#include <unordered_map>
 
 namespace KDecoration3
 {
@@ -20,8 +24,10 @@ class Decoration;
 
 namespace KWin
 {
+class GLFramebuffer;
 class GLShader;
 class GLTexture;
+class RenderView;
 class SurfaceInterface;
 }
 
@@ -114,17 +120,21 @@ namespace Kuura
  * OffscreenEffect::drawWindow() composites the window's captured texture, the
  * frosted backdrop is already on screen underneath it. Frost's material is
  * therefore applied to the WINDOW'S OWN translucent pixels (highlight, noise,
- * a sub-pixel edge refraction of the window's own content), composited over
- * Blur's untouched result -- Frost never reproduces, captures or replaces the
- * blur itself.
+ * light-surface hairline), composited over Blur's result; the only change
+ * Frost makes to Blur's pixels is the edge-band refraction described below.
+ * Frost never reproduces or replaces the blur itself.
  *
- * KNOWN LIMITATION of this design (reported, not hidden): the edge
- * refraction displaces the window's own translucent content, not the blurred
- * backdrop behind it, because the backdrop is never in Frost's texture. At
- * the token's ~0.42 px maximum displacement the visual difference is
- * negligible; refracting the backdrop itself would need Frost to read the
- * render target (as Blur's own blitFromRenderTarget() does) in a different
- * kind of effect, which is a larger redesign.
+ * BACKDROP REFRACTION (requirement change 2026-10-20, replaces the former
+ * "refraction displaces the window's own content" limitation): Frost
+ * overrides drawWindow() (see its docstring) to refract the BLURRED BACKDROP
+ * itself. Its turn in the chain comes after BlurEffect::drawWindow() has drawn
+ * the frosted backdrop onto the real render target and before
+ * OffscreenEffect::drawWindow() composites the window, so the frosted pixels
+ * are on the target at exactly that moment. Frost copies the edge band of
+ * them with GLFramebuffer::blitFromRenderTarget() -- the same call
+ * BlurEffect::blur() uses to read the backdrop (plugins/blur/blur.cpp) -- and
+ * draws it back displaced (frost_shader.h, kFrostBackdropFragmentShaderSource).
+ * Blur itself is neither forked nor modified; Frost stays an OffscreenEffect.
  */
 class Frost : public KWin::OffscreenEffect
 {
@@ -197,6 +207,18 @@ public:
      */
     bool eventFilter(QObject *watched, QEvent *event) override;
 
+    /**
+     * Remembers which RenderView (output) the frame being painted belongs to,
+     * then forwards down the chain. Mirrors BlurEffect::prePaintScreen()
+     * (plugins/blur/blur.cpp at the pinned tag): drawWindow() does not receive
+     * the view, and Frost's backdrop copies are kept per view because the same
+     * window can be painted on two outputs with different scales.
+     *
+     * @param data the screen pre-paint data; only `data.view` is read
+     *     (ScreenPrePaintData, effect/effect.h)
+     */
+    void prePaintScreen(KWin::ScreenPrePaintData &data) override;
+
 public Q_SLOTS:
     /**
      * Connected to EffectsHandler::windowDeleted (constructor) so a deleted
@@ -210,6 +232,16 @@ public Q_SLOTS:
      * @param window the window that was just deleted
      */
     void slotWindowDeleted(KWin::EffectWindow *window);
+
+    /**
+     * Connected to EffectsHandler::viewRemoved (constructor): frees every
+     * backdrop copy kept for an output that no longer exists. Mirrors
+     * BlurEffect::slotViewRemoved() (plugins/blur/blur.cpp), including making
+     * the GL context current before GL objects are destroyed.
+     *
+     * @param view the render view being removed
+     */
+    void slotViewRemoved(KWin::RenderView *view);
 
 #if KWIN_BUILD_X11
     /**
@@ -231,6 +263,40 @@ public Q_SLOTS:
 
 protected:
     /**
+     * Refracts the frosted backdrop along the glass edges, then composites the
+     * window exactly as OffscreenEffect::drawWindow() always did.
+     *
+     * WHY this hook and this order, traced through the pinned KWin source:
+     *   - EffectsHandler::drawWindow() (effect/effecthandler.cpp) walks the
+     *     chain with one shared iterator, so Frost's drawWindow() is entered
+     *     from inside BlurEffect::drawWindow() (blur.cpp), right after
+     *     `blur(renderTarget, ...)` has drawn the frosted backdrop onto
+     *     `renderTarget` and before anything composites the window.
+     *   - OffscreenEffect::drawWindow() (effect/offscreeneffect.cpp) is a
+     *     protected virtual override of Effect::drawWindow(), so a subclass
+     *     can run its own step first and then call it; the window's capture,
+     *     apply() and paint() are unchanged.
+     * So between the two calls, `renderTarget` holds exactly "Blur's output
+     * under this window", which is what refractBackdrop() reads.
+     *
+     * @param renderTarget the real target this frame is drawn into
+     * @param viewport its viewport (scale, projection, device mapping)
+     * @param window the window being drawn
+     * @param mask the paint mask KWin passes down the chain
+     * @param deviceRegion the device-space region being repainted
+     * @param data the window's paint data (translation/scale from earlier
+     *     paintWindow() steps, e.g. slidingpopups)
+     */
+    void drawWindow(const KWin::RenderTarget &renderTarget, const KWin::RenderViewport &viewport, KWin::EffectWindow *window,
+                    int mask, const KWin::Region &deviceRegion, KWin::WindowPaintData &data) override;
+
+    /**
+     * NOTE (2026-10-20): point 2 below (edge refraction) is no longer applied
+     * to the window's texture; it now displaces the backdrop instead
+     * (drawWindow(), frost_shader.h kFrostBackdropFragmentShaderSource) with
+     * the same edge-distance/falloff math. The rest of this specification is
+     * kept as written for its derivations.
+     *
      * Deforms one window's already-redirected offscreen texture: applies the
      * edge-refraction UV offset and draws the specular edge highlight, using
      * the shader bound via setShader() in the constructor. Must leave `data`
@@ -448,7 +514,7 @@ private:
     void updateWindowState(KWin::EffectWindow *window);
 
     /**
-     * Computes the bounding box of the area KWin's Blur effect frosts for one
+     * Computes the area KWin's Blur effect frosts for one
      * window, by the same rules as BlurEffect::updateBlurRegion() and
      * BlurEffect::blurRegion() (blur.cpp at the pinned tag): X11
      * _KDE_NET_WM_BLUR_BEHIND_REGION, Wayland SurfaceInterface::blurRegion(),
@@ -456,13 +522,70 @@ private:
      * region. An empty content region means the whole contents rect.
      *
      * @param window the window to inspect
-     * @return the bounding rect in frame-local LOGICAL coordinates, or
-     *     std::nullopt if the window requests no blur at all (and therefore
-     *     gets no glass material). A present but empty rect is possible (a
-     *     blur region fully outside the contents rect); the shader then
-     *     passes the window through unchanged.
+     * @return the region in frame-local LOGICAL coordinates (the full shape:
+     *     refractBackdrop() must not write outside it, e.g. in the cut-off
+     *     corners of a rounded popup; the window shader uses only its
+     *     bounding box), or std::nullopt if the window requests no blur at
+     *     all (and therefore gets no glass material). A present but empty
+     *     region is possible (a blur region fully outside the contents
+     *     rect); the material then passes the window through unchanged.
      */
-    std::optional<QRectF> glassBoundingRect(KWin::EffectWindow *window) const;
+    std::optional<KWin::RegionF> glassRegion(KWin::EffectWindow *window) const;
+
+    /**
+     * Whether KWin's Blur actually drew a frosted backdrop under this window
+     * in this frame -- the precondition for refracting it. Mirrors
+     * BlurEffect::shouldBlur() and BlurEffect::isActive() (plugins/blur/
+     * blur.cpp) condition by condition, and additionally requires the Blur
+     * effect to be loaded at all (EffectsHandler::isEffectLoaded("blur")).
+     * Without this, Frost would refract the SHARP desktop during a
+     * fullscreen effect or a transformed paint, where Blur deliberately
+     * draws nothing.
+     *
+     * @param window the window being drawn
+     * @param mask the paint mask passed to drawWindow()
+     * @param data the paint data passed to drawWindow()
+     * @return true if the backdrop under the glass is Blur's output
+     */
+    bool backdropIsBlurred(const KWin::EffectWindow *window, int mask, const KWin::WindowPaintData &data) const;
+
+    /**
+     * Copies the frosted backdrop's edge band from `renderTarget` into this
+     * window's per-view copy texture and draws it back onto `renderTarget`
+     * displaced inward along the nearest edge normal (frost_shader.h,
+     * kFrostBackdropFragmentShaderSource). Only pixels that are (a) inside the
+     * window's blur region, (b) within edge_falloff + 1 device pixels of the
+     * glass bounding box and (c) inside `deviceRegion` are written; the
+     * interior, where the displacement is zero, is never touched.
+     *
+     * The geometry handling copies BlurEffect::blur() (blur.cpp) step by step
+     * so both effects agree on where the glass is: the same data.scale /
+     * data.translation transform of the blur shape, the same rounded bounding
+     * box, the same per-dirty-rect blitFromRenderTarget() read, and the same
+     * device-pixel quad layout and projection for the draw.
+     *
+     * Silently does nothing (the window is then drawn without backdrop
+     * refraction, never with a broken one) if the shader failed to link, a
+     * GL object cannot be allocated, or backdropIsBlurred() is false.
+     *
+     * @param renderTarget the real render target holding Blur's output
+     * @param viewport its viewport
+     * @param window the window being drawn
+     * @param mask the paint mask
+     * @param deviceRegion the device-space region being repainted
+     * @param data the window's paint data
+     */
+    void refractBackdrop(const KWin::RenderTarget &renderTarget, const KWin::RenderViewport &viewport, KWin::EffectWindow *window,
+                         int mask, const KWin::Region &deviceRegion, const KWin::WindowPaintData &data);
+
+    /**
+     * Frees one window's backdrop copies (all views), making the GL context
+     * current first, as BlurEffect does before destroying its own textures
+     * (blur.cpp, updateBlurRegion()/slotViewRemoved()).
+     *
+     * @param window the window whose copies to free
+     */
+    void dropBackdropCopies(KWin::EffectWindow *window);
 
     /**
      * Connected to EffectsHandler::windowAdded (constructor) to call
@@ -557,6 +680,33 @@ private:
     // change signal and read by apply() every frame -- cached because the X11
     // source is a server round-trip that must not run per frame.
     QHash<KWin::EffectWindow *, QRectF> m_glassRects;
+
+    // The full glass region per redirected window (frame-local logical), cached
+    // on the same signals as m_glassRects; refractBackdrop() clips to it.
+    QHash<KWin::EffectWindow *, KWin::RegionF> m_glassRegions;
+
+    // The backdrop-refraction pass's own shader (frost_shader.h,
+    // kFrostBackdropFragmentShaderSource). Null if it failed to link: the
+    // window material still works, only backdrop refraction is off.
+    std::unique_ptr<KWin::GLShader> m_backdropShader;
+
+    /**
+     * One window's copy of the frosted backdrop under its glass, for one
+     * output. Persistent across frames for the same reason BlurEffect keeps
+     * its BlurRenderData per window and view (blur.h): only the repainted
+     * part is re-blitted each frame, and the rest must still hold the
+     * backdrop from the last frame it was repainted -- NOT whatever is on
+     * screen there now, which already has the window composited on top.
+     */
+    struct BackdropCopy
+    {
+        std::unique_ptr<KWin::GLTexture> texture;
+        std::unique_ptr<KWin::GLFramebuffer> framebuffer;
+    };
+    std::unordered_map<KWin::EffectWindow *, std::unordered_map<KWin::RenderView *, BackdropCopy>> m_backdropCopies;
+
+    // The view of the frame being painted (prePaintScreen()), as in BlurEffect.
+    KWin::RenderView *m_currentView = nullptr;
 
 #if KWIN_BUILD_X11
     // The shared _KDE_NET_WM_BLUR_BEHIND_REGION atom (see slotPropertyNotify()'s

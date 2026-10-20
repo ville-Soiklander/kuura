@@ -1,0 +1,78 @@
+# Window decoration: a native KDecoration3 plugin with round traffic-light buttons on
+# the left, a title bar coloured from the active colour scheme, its own drop shadow and
+# rounded corners on ALL FOUR corners. It replaces an earlier QML (Aurorae) theme,
+# because only a C++ Decoration subclass can call the protected setBorderRadius() that
+# rounds the bottom corners (INTERFACE_NOTES.md, src/decoration.h).
+#
+# Like kuura-frost this package compiles native code against the pinned Arch snapshot's
+# own KDecoration3/Qt/KF6 headers, and like kuura-frost and kuura-shell its build()
+# generates the design-token headers from this repository's design/tokens.json first,
+# so no token value is ever hand-copied into the C++ sources.
+#
+# The package name comes from the environment (DISTRO_NAME, see .env.example), the same
+# convention as the other packages; building by hand without it fails with a clear
+# error. makepkg is run through build/build_repo.sh, which exports the variable. The
+# plugin id (and file name) is "$DISTRO_NAME.decoration", which the skel kwinrc of the
+# shell package selects with `library=`.
+
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-decoration"
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Window decoration with round traffic-light buttons, colour-scheme title bar, drop shadow and four rounded corners"
+# Native code against a pinned library ABI (KDecoration3, Qt), hence a real architecture.
+arch=('x86_64')
+url='https://github.com/ville-Soiklander/kuura'
+# GPL-3.0-or-later, the project default: unlike kuura-frost (GPL-2.0-or-later because it
+# links KWin itself), this plugin links only LGPL libraries (kdecoration, Qt, KF6
+# CoreAddons), so the default applies. An SPDX id covered by Arch's `licenses` package,
+# so no licence text needs to be installed.
+license=('GPL-3.0-or-later')
+# Each library the plugin links directly is listed directly instead of relying on kwin's
+# own dependency list:
+#   kwin          the compositor that loads the plugin (it also reads the kwinrc
+#                 `library=` key that names it)
+#   kdecoration   libkdecorations3.so: the Decoration / DecorationButton base classes
+#   qt6-base      Qt6::Core and Qt6::Gui (QPainter, QImage, QColor)
+#   kcoreaddons   KPluginFactory (K_PLUGIN_FACTORY_WITH_JSON)
+depends=('kwin' 'kdecoration' 'qt6-base' 'kcoreaddons')
+# Build toolchain: cmake + ninja build the project, extra-cmake-modules provides
+# KDEInstallDirs/KDECMakeSettings (install paths, module prefix, BUILD_TESTING).
+# python: build() runs design/generate.py through its `python -m` CLI (standard library
+# only, see that module's docstring), the same reason as kuura-shell and kuura-frost.
+# No vulkan-headers/mesa (unlike kuura-frost): this plugin does not link KWin::kwin.
+makedepends=('cmake' 'ninja' 'extra-cmake-modules' 'python')
+
+# build(): generate <tokens.h> and <token_colors.h>, then configure and build. The
+# design.generate call has the same form as kuura-frost's (this PKGBUILD sits at the same
+# depth, packages/<name>/PKGBUILD, so three ".." from $srcdir reach the project root);
+# --out-dir "$srcdir/../generated" is packages/kuura-decoration/generated/, the directory
+# CMakeLists.txt adds to the include path as generated/cpp. $srcdir is makepkg's own
+# directory (packages/kuura-decoration/src, there is no source= to extract), so
+# `cd "$srcdir/.."` reaches CMakeLists.txt. BUILD_TESTING=ON builds the unit tests that
+# check() runs; they are not installed.
+build() {
+    ( cd "$srcdir/../../.." && python3 -m design.generate \
+        --out-dir "$srcdir/../generated" --name "$DISTRO_NAME" )
+
+    ( cd "$srcdir/.." && cmake -S . -B build -G Ninja -DCMAKE_INSTALL_PREFIX=/usr \
+        -DDISTRO_NAME="$DISTRO_NAME" -DBUILD_TESTING=ON \
+        && cmake --build build )
+}
+
+# check(): runs the three headless unit tests of the pure layout, palette and shadow
+# logic (tests/*_test.cpp) against the same generated token headers the shipped plugin
+# uses, so a token change that breaks a layout or colour rule fails the package build.
+# They need no display; QT_QPA_PLATFORM=offscreen only guards against a future test that
+# touches QtGui. --verbose keeps each test's "N checks passed" summary in the build log,
+# which is the evidence that all three really ran.
+check() {
+    cd "$srcdir/.."
+    QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure --verbose
+}
+
+# package(): installs the plugin via CMake's own install() rule into
+# ${KDE_INSTALL_PLUGINDIR}/${KDECORATION_PLUGIN_DIR} (/usr/lib/qt6/plugins/
+# org.kde.kdecoration3/), the directory KWin searches; nothing is re-derived by hand.
+package() {
+    ( cd "$srcdir/.." && DESTDIR="$pkgdir" cmake --install build )
+}

@@ -20,7 +20,7 @@
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-frost"
 pkgver=0.1.0
-pkgrel=4
+pkgrel=6
 pkgdesc="Glass 'material' KWin compositor effect (background blur reuse, edge refraction, specular highlight, dither noise)"
 # Unlike kuura-desktop/kuura-shell (arch=('any'): pure config/scripts), this
 # package compiles a native .so against KWin's C++ effect ABI, which is NOT

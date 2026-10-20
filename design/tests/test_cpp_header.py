@@ -13,7 +13,9 @@ import copy
 import json
 from pathlib import Path
 
-from design.generators.cpp_header import render
+import pytest
+
+from design.generators.cpp_header import render, render_colors
 
 # The real design tokens live next to the tests' parent package (design/).
 REAL_TOKENS_PATH = Path(__file__).resolve().parent.parent / "tokens.json"
@@ -223,3 +225,117 @@ def test_real_tokens_export_the_stroke_constants() -> None:
     text = render(json.loads(REAL_TOKENS_PATH.read_text(encoding="utf-8")))
     assert "inline constexpr float kStrokeHairline = 1.0f;" in text
     assert "inline constexpr float kStrokeFocus = 2.0f;" in text
+
+
+# ---------------------------------------------------------------- render_colors()
+
+# Small colour fixture: an opaque token, a token with explicit alpha, lowercase hex
+# input, a two-word key, and keys given out of alphabetical order, so sorting, the
+# alpha rule, uppercasing and the naming rule are each exercised.
+COLOR_TOKENS = {
+    "color": {
+        "light": {"window": "#f2f4f7", "shadow": "#00000033", "button_close": "#E5534B"},
+        "dark": {"window": "#15181C", "shadow": "#00000066", "button_close": "#E5534B"},
+    },
+}
+
+COLOR_GOLDEN = (
+    "#pragma once\n"
+    "\n"
+    "// Colour tokens - generated from design/tokens.json, do not edit by hand.\n"
+    '// Each value is 0xRRGGBBAA; a "#RRGGBB" token gets AA = FF.\n'
+    "#include <cstdint>\n"
+    "\n"
+    "namespace Kuura::Tokens::Light\n"
+    "{\n"
+    "inline constexpr std::uint32_t kButtonClose = 0xE5534BFFu;\n"
+    "inline constexpr std::uint32_t kShadow = 0x00000033u;\n"
+    "inline constexpr std::uint32_t kWindow = 0xF2F4F7FFu;\n"
+    "} // namespace Kuura::Tokens::Light\n"
+    "\n"
+    "namespace Kuura::Tokens::Dark\n"
+    "{\n"
+    "inline constexpr std::uint32_t kButtonClose = 0xE5534BFFu;\n"
+    "inline constexpr std::uint32_t kShadow = 0x00000066u;\n"
+    "inline constexpr std::uint32_t kWindow = 0x15181CFFu;\n"
+    "} // namespace Kuura::Tokens::Dark\n"
+)
+
+
+def test_render_colors_golden_output() -> None:
+    """The whole colour header equals the hand-written golden text above."""
+    assert render_colors(COLOR_TOKENS) == COLOR_GOLDEN
+
+
+def test_render_colors_naming_rule() -> None:
+    """Snake_case keys become k + PascalCase, never keeping an underscore."""
+    tokens = {"color": {"light": {"text_secondary": "#5B6470"}, "dark": {"text_secondary": "#98A2AE"}}}
+    text = render_colors(tokens)
+    assert "kTextSecondary = 0x5B6470FFu;" in text
+    assert "kTextSecondary = 0x98A2AEFFu;" in text
+    assert "Text_secondary" not in text
+
+
+def test_render_colors_alpha_handling() -> None:
+    """#RRGGBB gets alpha FF; #RRGGBBAA keeps its own alpha digits."""
+    tokens = {"color": {"light": {"a": "#102030", "b": "#10203040"}, "dark": {"a": "#000000", "b": "#FFFFFF00"}}}
+    text = render_colors(tokens)
+    assert "kA = 0x102030FFu;" in text
+    assert "kB = 0x10203040u;" in text
+    assert "kA = 0x000000FFu;" in text
+    assert "kB = 0xFFFFFF00u;" in text
+
+
+def test_render_colors_sorted_by_constant_name_within_each_mode() -> None:
+    """Constants appear in ascending order of the emitted name, in both namespaces."""
+    real_tokens = json.loads(REAL_TOKENS_PATH.read_text(encoding="utf-8"))
+    text = render_colors(real_tokens)
+    for mode in ("Light", "Dark"):
+        body = text.split(f"namespace Kuura::Tokens::{mode}\n{{\n")[1].split("}")[0]
+        names = [line.split()[4] for line in body.splitlines()]
+        assert names == sorted(names)
+        assert len(names) == 20
+
+
+def test_render_colors_real_shadow_values() -> None:
+    """The decoration relies on shadow 0x00000033u (light) and 0x00000066u (dark)."""
+    real_tokens = json.loads(REAL_TOKENS_PATH.read_text(encoding="utf-8"))
+    text = render_colors(real_tokens)
+    light, dark = text.split("\nnamespace Kuura::Tokens::Dark\n")
+    assert "kShadow = 0x00000033u;" in light
+    assert "kShadow = 0x00000066u;" in dark
+
+
+def test_render_colors_is_deterministic_and_lf_only() -> None:
+    """Same input, same bytes; no carriage return; exactly one trailing newline."""
+    real_tokens = json.loads(REAL_TOKENS_PATH.read_text(encoding="utf-8"))
+    first = render_colors(real_tokens)
+    assert first == render_colors(copy.deepcopy(real_tokens))
+    assert "\r" not in first
+    assert first.endswith("\n") and not first.endswith("\n\n")
+
+
+@pytest.mark.parametrize("bad", ["#12345", "#1234567", "#GGGGGG", "123456", "red", "", 12, None])
+def test_render_colors_rejects_malformed_colour(bad: object) -> None:
+    """A value that is not #RRGGBB / #RRGGBBAA raises ValueError naming the path."""
+    tokens = {"color": {"light": {"window": bad}, "dark": {"window": "#000000"}}}
+    with pytest.raises(ValueError, match="color.light.window"):
+        render_colors(tokens)
+
+
+@pytest.mark.parametrize("tokens", [{}, {"color": {}}, {"color": {"light": {}}}, {"color": {"light": {}, "dark": []}}])
+def test_render_colors_rejects_missing_palettes(tokens: dict) -> None:
+    """A missing or non-dict light/dark palette raises ValueError."""
+    with pytest.raises(ValueError, match="color"):
+        render_colors(tokens)
+
+
+def test_render_does_not_leak_colours_and_includes_light_hairline_tokens() -> None:
+    """tokens.h stays colour-free and exports the four Frost light-rim constants."""
+    real_tokens = json.loads(REAL_TOKENS_PATH.read_text(encoding="utf-8"))
+    text = render(real_tokens)
+    assert "0x" not in text
+    assert "inline constexpr float kMaterialEdgeHighlightLightHairlineOpacity = 0.3f;" in text
+    assert "inline constexpr float kMaterialEdgeHighlightLightHairlineWidth = 1.0f;" in text
+    assert "inline constexpr float kMaterialEdgeHighlightLightLumaLow = 0.55f;" in text
+    assert "inline constexpr float kMaterialEdgeHighlightLightLumaHigh = 0.85f;" in text
