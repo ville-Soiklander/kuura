@@ -128,6 +128,33 @@ the clock.
 - CI runs `make shots`; a missing or differing golden fails the job and uploads the
   diffs; on pull requests the summary is posted as a comment.
 
+## GPU display mode (optional, local only)
+
+`python3 -m harness.shots.capture --display gpu --out DIR ...` boots the same image with
+`-device virtio-vga-gl` and `-display egl-headless,rendernode=/dev/dri/renderD128`
+(virgl on the host GPU; under WSL2 that is the d3d12 render node). KWin then gets a
+hardware GL context, so effects that need GL (Blur, Frost) render and can be screenshot-tested.
+
+- **Default stays software.** Without `--display gpu` the QEMU command line is unchanged
+  (legacy `VGA`, `-display none`); CI always uses it.
+- **Capture goes over VNC.** QMP `screendump` fails ("no surface") while the guest scans out
+  a GL texture, so gpu mode adds `-vnc unix:<run_dir>/vnc.sock` and `harness/shots/vnc.py`
+  (stdlib RFB client, Raw encoding) takes each frame, ~0.3-1 s at 2560x1440. Input still
+  goes through QMP. Every VNC operation has a timeout and an overall deadline, so a hung
+  QEMU fails the run with an error instead of blocking.
+- **Separate goldens.** Compare gpu captures only against `harness/goldens-gpu/`
+  (`--goldens harness/goldens-gpu`); never mix them with `harness/goldens/`. Accepting
+  gpu goldens is a human decision like any other.
+- **Proves:** KWin runs with a GL context via virgl, and GL-dependent effects produce the
+  expected pixels in that stack.
+- **Cannot prove:** real-hardware performance; behaviour with the native NVIDIA, AMD or
+  Intel drivers (the guest only sees virtio-gpu); anything in CI (no GPU there).
+- **Host packages (Arch build distro):** `mesa`, `virglrenderer`, `qemu-hw-display-virtio-vga`,
+  `qemu-hw-display-virtio-vga-gl`, `qemu-hw-display-virtio-gpu`, `qemu-hw-display-virtio-gpu-gl`,
+  `qemu-ui-opengl`, `qemu-ui-egl-headless`. The render node must exist and be accessible.
+- Note: software rendering in the normal mode comes from the emulated non-3D display
+  device, not from `LIBGL_ALWAYS_SOFTWARE` (kwin_wayland on DRM ignores that variable).
+
 ## Limits
 
 **Confirmed empirically: standard GitHub-hosted `ubuntu-24.04` runners have no usable

@@ -73,6 +73,11 @@ class FakeDesktop:
         tick: Append a per-screendump counter to every picture, like a clock that changes
             all the time (the stand-in for the masked panel clock).
         fail_keys: Raise ``QmpError`` when a key is sent.
+        packages: Names of the packages installed in the fake guest (answers
+            ``pacman -Q <name>`` run through ``exec``).
+        execs: Every ``exec`` argument list in order (root commands, kept apart from
+            ``log`` so the user-visible action order stays easy to assert).
+        exec_error: If set, ``exec`` raises it (an agent that does not answer).
     """
 
     def __init__(self, clock: FakeClock, content: bytes = b"desktop") -> None:
@@ -88,6 +93,9 @@ class FakeDesktop:
         self.fail_keys = False
         self.dumps = 0
         self.user = GuestUser()
+        self.packages: set[str] = {"kuura-desktop"}
+        self.execs: list[list[str]] = []
+        self.exec_error: Exception | None = None
         self._pending: list[tuple[float, bytes]] = []
 
     def _act(self, kind: str, value: Any) -> None:
@@ -179,6 +187,26 @@ class FakeDesktop:
         if wait_exit:
             return ExecResult(self.exit_codes.get(argv[0], 0), "", "")
         return None
+
+    def exec(self, argv: list[str], timeout: float = 20.0) -> ExecResult:
+        """
+        Run a root command in the fake guest; only ``pacman -Q <name>`` is understood.
+
+        Args:
+            argv: The command.
+            timeout: Ignored.
+
+        Returns:
+            Exit code 0 for a query of an installed package, 1 for anything else.
+
+        Raises:
+            Exception: ``exec_error`` when set.
+        """
+        self.execs.append(list(argv))
+        if self.exec_error is not None:
+            raise self.exec_error
+        installed = len(argv) == 3 and argv[:2] == ["/usr/bin/pacman", "-Q"] and argv[2] in self.packages
+        return ExecResult(0 if installed else 1, "", "")
 
     def write_file(self, path: str, data: bytes) -> None:
         """
@@ -899,6 +927,83 @@ def test_apply_mode_errors(tmp_path: Path, clock: FakeClock, desktop: FakeDeskto
     desktop.exit_codes.clear()
     with pytest.raises(StepError, match="never changed"):
         runner.apply_mode(Mode("dark", "dark"), generated, "kuura", [])
+
+
+
+def test_apply_mode_refuses_a_theme_name_the_image_is_not_built_from(tmp_path: Path, clock: FakeClock, desktop: FakeDesktop) -> None:
+    """
+    Regression: a capture run without DISTRO_NAME used the default theme name "theme"
+    on the kuura image. The desktop then switched to "theme-dark", which looks dark, but
+    the welcome window only recognises the product's own "<product>-dark" scheme id and
+    opened light, so the dark capture silently differed from the golden. A theme name
+    whose ``<name>-desktop`` package is not installed in the guest must stop the mode
+    before anything is written or applied.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        clock: Fake clock.
+        desktop: Fake desktop (the image has ``kuura-desktop`` only).
+
+    Returns:
+        None.
+    """
+    generated = tmp_path / "generated"
+    (generated / "plasma").mkdir(parents=True)
+    (generated / "plasma" / "theme-dark.colors").write_bytes(b"[General]\nName=theme\n")
+    desktop.rules[("run", "plasma-apply-colorscheme")] = [(1.0, b"dark-desktop")]
+    runner = make_runner(tmp_path, desktop, clock, make_settings(reset=RESET))
+    with pytest.raises(StepError, match="'theme'.*theme-desktop.*DISTRO_NAME"):
+        runner.apply_mode(Mode("dark", "dark"), generated, "theme", [])
+    assert desktop.files == {}
+    assert ("run", "plasma-apply-colorscheme") not in desktop.log
+    assert desktop.execs == [["/usr/bin/pacman", "-Q", "theme-desktop"]]
+
+
+def test_apply_mode_checks_the_theme_name_once_per_runner(tmp_path: Path, clock: FakeClock, desktop: FakeDesktop) -> None:
+    """
+    The image does not change during a run, so the product check runs before the first
+    switch only; the matching name switches normally.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        clock: Fake clock.
+        desktop: Fake desktop.
+
+    Returns:
+        None.
+    """
+    generated = make_generated(tmp_path)
+    (generated / "plasma" / "kuura-light.colors").write_bytes(b"[General]\nName=kuura\n")
+    runner = make_runner(tmp_path, desktop, clock, make_settings())
+    desktop.rules[("run", "plasma-apply-colorscheme")] = [(1.0, b"dark-desktop")]
+    assert runner.apply_mode(Mode("dark", "dark"), generated, "kuura", []).stable
+    desktop.rules[("run", "plasma-apply-colorscheme")] = [(1.0, b"light-desktop")]
+    assert runner.apply_mode(Mode("light", "light"), generated, "kuura", []).stable
+    assert desktop.execs == [["/usr/bin/pacman", "-Q", "kuura-desktop"]]
+
+
+def test_apply_mode_reports_an_unanswered_product_check_as_a_step_error(tmp_path: Path, clock: FakeClock, desktop: FakeDesktop) -> None:
+    """
+    A guest agent that times out or refuses the check is a StepError (the mode fails and
+    is reported), not an exception that ends the whole capture run; the check is tried
+    again on the next switch because it never gave an answer.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        clock: Fake clock.
+        desktop: Fake desktop.
+
+    Returns:
+        None.
+    """
+    runner = make_runner(tmp_path, desktop, clock, make_settings())
+    generated = make_generated(tmp_path)
+    for error in (TimeoutError("slow"), RuntimeError("refused")):
+        desktop.exec_error = error
+        with pytest.raises(StepError, match="could not check"):
+            runner.apply_mode(Mode("dark", "dark"), generated, "kuura", [])
+    assert desktop.files == {}
+    assert len(desktop.execs) == 2
 
 
 # --- frame comparison on real PNG files ---------------------------------------------------

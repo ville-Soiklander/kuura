@@ -53,6 +53,10 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # loading applications use far more.
 MAX_BUSY_FRACTION = 0.15
 
+# Package manager inside the guest; asked (as root, no shell) whether the image was built
+# from the product named by the theme name (see Runner._check_product).
+PACMAN = "/usr/bin/pacman"
+
 # Reads the guest's CPU counters: returns (busy, idle) jiffies summed over all CPUs.
 CpuProbe = Callable[[], "tuple[int, int]"]
 
@@ -89,6 +93,9 @@ class GuestLike(Protocol):
 
     def process_running(self, name: str) -> bool:
         """Tell whether a process exists in the guest."""
+
+    def exec(self, argv: list[str], timeout: float = 20.0) -> ExecResult:
+        """Run a program as root and wait for it."""
 
 
 FrameMatcher = Callable[[Path, Path, Sequence[Rect]], bool]
@@ -291,6 +298,8 @@ class Runner:
         self._cpu_probe = cpu_probe
         self._frame_paths = (work_dir / "frame-a.png", work_dir / "frame-b.png")
         self._last_frame = self._frame_paths[0]
+        # Theme names already confirmed to be the image's product (see _check_product).
+        self._product_checked: set[str] = set()
 
     def _read_cpu(self) -> tuple[int, int] | None:
         """
@@ -436,6 +445,41 @@ class Runner:
             raise StepError("the desktop did not settle after boot")
         return result
 
+    def _check_product(self, name: str) -> None:
+        """
+        Make sure the theme name is the product the guest image was built from.
+
+        WHY: the product's own programs recognise the colour mode by the scheme id
+        "<product>-dark" (the welcome window's launcher, packages/kuura-welcome, opens
+        light for any other id). A run with a different theme name (the capture
+        default "theme" when DISTRO_NAME is not set) still turns the desktop dark,
+        because the generated scheme content is identical, so only those programs
+        silently show the wrong mode and their captures differ from the goldens. Every
+        harness image installs the "<product>-desktop" metapackage (the screenshot
+        image explicitly, the installed system through the ISO), so its presence ties
+        the theme name to the image. The image does not change during a run, so a
+        confirmed name is not asked again.
+
+        Args:
+            name: Theme name (the ``<name>`` of ``<name>-<scheme>.colors``).
+
+        Raises:
+            StepError: the package is missing, or the guest did not answer the query.
+        """
+        if name in self._product_checked:
+            return
+        package = f"{name}-desktop"
+        try:
+            result = self._guest.exec([PACMAN, "-Q", package], timeout=30.0)
+        except (TimeoutError, RuntimeError) as exc:
+            raise StepError(f"could not check that the image is built from {package} ({exc})") from None
+        if result.exit_code != 0:
+            raise StepError(
+                f"theme name {name!r} does not match the image: package {package} is not installed; "
+                "pass --name or set DISTRO_NAME to the product name the image was built with"
+            )
+        self._product_checked.add(name)
+
     def apply_mode(self, mode: Mode, generated_dir: Path, name: str, masks: Sequence[Rect]) -> SettleResult:
         """
         Switch the desktop to a colour mode.
@@ -456,8 +500,9 @@ class Runner:
             The settle result.
 
         Raises:
-            StepError: the file is missing, the tool failed or the screen did not change
-                and settle.
+            StepError: the theme name is not the image's product (``_check_product``),
+                the file is missing, the tool failed or the screen did not change and
+                settle.
         """
         scheme_id = f"{name}-{mode.scheme}"
         source = generated_dir / "plasma" / f"{scheme_id}.colors"
@@ -465,6 +510,7 @@ class Runner:
             data = source.read_bytes()
         except OSError:
             raise StepError(f"generated colour scheme {source.name} is missing") from None
+        self._check_product(name)
         # WHY reset first: the per-state reset only runs before a state's own steps, so the
         # previous mode's last window would still be open while Plasma re-themes the desktop.
         # A window overlapping the bottom shelf makes Plasma regenerate the shelf's shadow

@@ -71,6 +71,7 @@ class CaptureOptions:
         generated_dir: Directory produced by ``python -m design.generate``.
         image_dir: Directory with ``root.img``, ``vmlinuz``, ``initramfs.img``.
         states_file: The ``states.toml`` to use.
+        display: ``"software"`` (default) or the local-only ``"gpu"`` mode.
     """
 
     out_dir: Path
@@ -80,6 +81,7 @@ class CaptureOptions:
     generated_dir: Path
     image_dir: Path
     states_file: Path = STATES_FILE
+    display: str = "software"
 
 
 def display_path(path: Path, root: Path = PROJECT_ROOT) -> str:
@@ -156,6 +158,7 @@ def add_selection_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--modes", help="comma separated mode names (default: all)")
     parser.add_argument("--name", default=os.environ.get("DISTRO_NAME", "theme"), help="theme name (default: $DISTRO_NAME or theme)")
     parser.add_argument("--generated", type=Path, default=PROJECT_ROOT / ".build" / "generated", help="directory made by `python -m design.generate`")
+    parser.add_argument("--display", choices=("software", "gpu"), default="software", help="software (default, CI) or gpu (local only: virgl, needs a host render node; compare against harness/goldens-gpu, never harness/goldens)")
     parser.add_argument("--image-dir", type=Path, default=PROJECT_ROOT / ".build" / "vm", help="directory with root.img, vmlinuz, initramfs.img")
 
 
@@ -182,6 +185,7 @@ def build_options(args: argparse.Namespace, out_dir: Path) -> CaptureOptions:
         name=args.name,
         generated_dir=args.generated,
         image_dir=args.image_dir,
+        display=getattr(args, "display", "software"),
     )
 
 
@@ -222,7 +226,7 @@ def _default_runner(vm: Any, settings: states_module.Settings, work_dir: Path, l
     Returns:
         The runner.
     """
-    return Runner(vm.qmp, vm.agent, settings, work_dir, log=log, cpu_probe=vm.agent.cpu_sample)
+    return Runner(getattr(vm, "screen", None) or vm.qmp, vm.agent, settings, work_dir, log=log, cpu_probe=vm.agent.cpu_sample)
 
 
 def _default_vm(config: VmConfig) -> Vm:
@@ -290,7 +294,7 @@ def run_capture(
         (target / f"{state.name}.FAILED.png").unlink(missing_ok=True)
 
     settings = parsed.settings
-    config = VmConfig(image_dir=options.image_dir, resolution=settings.resolution, rtc_base=settings.rtc_base)
+    config = VmConfig(image_dir=options.image_dir, resolution=settings.resolution, rtc_base=settings.rtc_base, display=options.display)
     manifest: dict[str, Any] = {
         "schema": 1,
         "name": options.name,

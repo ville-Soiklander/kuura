@@ -46,10 +46,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from harness.shots.guest import GuestAgent, GuestUser
 from harness.shots.qmp import Qmp
+from harness.shots.vnc import VncScreen
 
 # The initial guest clock must look like a second-resolution ISO timestamp (QEMU's
 # -rtc base= syntax).
@@ -60,6 +61,14 @@ RTC_BASE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$")
 KERNEL_CMDLINE = "root=/dev/vda rw console=ttyS0,115200 loglevel=4 net.ifnames=0 systemd.show_status=1"
 
 IMAGE_FILES = ("root.img", "vmlinuz", "initramfs.img")
+
+# Display modes. "software" (default, used by CI) is the legacy VGA device with no
+# host GPU. "gpu" is an optional, local-only mode: virtio-vga-gl + virgl through an
+# EGL-headless host render node, so KWin gets a hardware GL context (see
+# docs/HARNESS_CONTRACT.md, "GPU display mode").
+DISPLAY_MODES = ("software", "gpu")
+DEFAULT_RENDER_NODE = Path("/dev/dri/renderD128")
+VNC_SOCKET_NAME = "vnc.sock"
 
 
 class VmEnvironmentError(RuntimeError):
@@ -85,6 +94,9 @@ class VmConfig:
         boot_timeout_s: Seconds allowed for QEMU to come up and the guest agent to answer.
         require_kvm: Check ``/dev/kvm`` before starting (tests switch this off).
         user: The desktop user of the image.
+        display: ``"software"`` (default; byte-identical to the historic command line)
+            or ``"gpu"`` (virgl; screenshots are taken over VNC, see ``Vm.screen``).
+        render_node: Host DRM render node used by ``egl-headless`` in gpu mode.
     """
 
     image_dir: Path
@@ -96,14 +108,19 @@ class VmConfig:
     boot_timeout_s: float = 180.0
     require_kvm: bool = True
     user: GuestUser = field(default_factory=GuestUser)
+    display: Literal["software", "gpu"] = "software"
+    render_node: Path = DEFAULT_RENDER_NODE
 
     def validate(self) -> None:
         """
         Check the values that end up on the QEMU command line.
 
         Raises:
-            ValueError: on a malformed RTC base or an out-of-range size, memory or CPU count.
+            ValueError: on a malformed RTC base, an unknown display mode, or an
+                out-of-range size, memory or CPU count.
         """
+        if self.display not in DISPLAY_MODES:
+            raise ValueError(f"display must be one of {', '.join(DISPLAY_MODES)}")
         if not RTC_BASE_PATTERN.match(self.rtc_base):
             raise ValueError("rtc_base must look like 2026-09-25T12:00:00")
         width, height = self.resolution
@@ -139,6 +156,21 @@ def build_command(config: VmConfig, run_dir: Path) -> list[str]:
     """
     image = config.image_dir
     width, height = config.resolution
+    if config.display == "gpu":
+        # WHY virtio-vga-gl + egl-headless: the guest needs a 3D-capable device for
+        # KWin to get hardware GL; egl-headless runs virglrenderer on the host render
+        # node without opening a window. WHY -vnc: QMP screendump fails with "no
+        # surface" while the guest scans out a GL texture, whereas VNC reads every
+        # frame back (harness/shots/vnc.py).
+        display_device = f"virtio-vga-gl,xres={width},yres={height}"
+        display_args = [
+            "-display", f"egl-headless,rendernode={_escape(config.render_node)}",
+            "-vnc", f"unix:{_escape(run_dir / VNC_SOCKET_NAME)}",
+        ]
+    else:
+        # NOT virtio-vga: it segfaults qemu-system-x86_64 on the build host (module docstring).
+        display_device = f"VGA,xres={width},yres={height}"
+        display_args = ["-display", "none"]
     return [
         config.qemu_binary,
         "-name", "harness-vm",
@@ -150,11 +182,10 @@ def build_command(config: VmConfig, run_dir: Path) -> list[str]:
         "-snapshot",
         "-drive", f"file={_escape(image / 'root.img')},if=virtio,format=raw",
         "-vga", "none",
-        # NOT virtio-vga: it segfaults qemu-system-x86_64 on the build host (module docstring).
-        "-device", f"VGA,xres={width},yres={height}",
+        "-device", display_device,
         "-device", "usb-ehci", "-device", "usb-tablet",
         "-nic", "none",
-        "-display", "none",
+        *display_args,
         "-rtc", f"base={config.rtc_base},clock=vm",
         "-serial", f"file:{_escape(run_dir / 'serial.log')}",
         "-qmp", f"unix:{_escape(run_dir / 'qmp.sock')},server=on,wait=off",
@@ -297,6 +328,8 @@ class Vm:
 
     Attributes:
         qmp: The QMP client (after start).
+        screen: What takes screenshots and sends input (after start): ``qmp`` itself in
+            software mode, a ``VncScreen`` wrapping it in gpu mode.
         agent: The guest-agent client (after start).
         timings: Boot milestones in seconds since QEMU started (``qmp_connected_s``,
             ``agent_up_s``).
@@ -308,6 +341,7 @@ class Vm:
         self.config = config
         self.qmp: Qmp | None = None
         self.agent: GuestAgent | None = None
+        self.screen: Any = None
         self.timings: dict[str, float] = {}
         self.final_serial_tail: list[str] = []
         self._process: subprocess.Popen[bytes] | None = None
@@ -369,6 +403,10 @@ class Vm:
         for name in IMAGE_FILES:
             if not (self.config.image_dir / name).is_file():
                 raise VmEnvironmentError(f"image file {name} is missing; build the guest image first")
+        if self.config.display == "gpu" and not self.config.render_node.exists():
+            raise VmEnvironmentError(
+                f"gpu display mode needs a host render node, but {self.config.render_node} does not exist"
+            )
 
     def _make_run_dir(self) -> Path:
         """
@@ -426,6 +464,9 @@ class Vm:
                 timeout=socket_wait,
                 alive=self.is_alive,
             )
+            self.screen = self.qmp
+            if self.config.display == "gpu":
+                self.screen = VncScreen(self.qmp, run_dir / VNC_SOCKET_NAME)
             self.timings["qmp_connected_s"] = round(time.monotonic() - self._t0, 1)
             self.agent = GuestAgent.connect(run_dir / "qga.sock", self.config.user, socket_wait, self.is_alive)
             self.agent.wait_ready(deadline_s, alive=self.is_alive)
