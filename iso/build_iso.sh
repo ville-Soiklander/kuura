@@ -122,6 +122,15 @@ acquire_lock() {
     flock --nonblock 9 || die "another build_iso.sh is already running for '$ISO_BUILD_DIR'"
 }
 
+# Boot menu files (BIOS syslinux, UEFI systemd-boot, GRUB) whose titles use the
+# @DISTRO_DISPLAY_NAME@ template token; tests/test_boot_menu_branding.py keeps this
+# list in sync with the profile.
+BOOT_MENU_FILES=(
+    syslinux/archiso_head.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_pxe-linux.cfg
+    efiboot/loader/entries/01-archiso-linux.conf efiboot/loader/entries/02-archiso-speech-linux.conf
+    grub/grub.cfg grub/loopback.cfg
+)
+
 # stage_context
 # Copies everything the image build and the mkarchiso run need into a scratch
 # directory, substitutes the @DISTRO_NAME@ template token, and stages the shipped
@@ -144,6 +153,14 @@ stage_context() {
     for f in pacman.conf packages.x86_64 airootfs/etc/pacman.conf; do
         [ -f "$TMP_DIR/ctx/profile/$f" ] || die "expected template file missing: profile/$f"
         sed -i "s/@DISTRO_NAME@/$DISTRO_NAME/g" "$TMP_DIR/ctx/profile/$f"
+    done
+
+    # Boot menu titles carry the capitalised display name (${DISTRO_NAME^} is the same
+    # rule as name.capitalize() in design/generators/calamares_branding.py; the name is
+    # validated lowercase above). These files are templates only in the staged copy.
+    for f in "${BOOT_MENU_FILES[@]}"; do
+        [ -f "$TMP_DIR/ctx/profile/$f" ] || die "expected boot menu file missing: profile/$f"
+        sed -i "s/@DISTRO_DISPLAY_NAME@/${DISTRO_NAME^}/g" "$TMP_DIR/ctx/profile/$f"
     done
 
     # Ship a second copy of the repository inside the airootfs overlay itself (see
