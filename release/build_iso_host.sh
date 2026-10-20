@@ -123,7 +123,7 @@ stage_profile() {
     done
 
     # Boot menu titles: capitalised display name (same rule as iso/build_iso.sh).
-    for f in syslinux/archiso_head.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_pxe-linux.cfg         efiboot/loader/entries/01-archiso-linux.conf efiboot/loader/entries/02-archiso-speech-linux.conf         grub/grub.cfg grub/loopback.cfg; do
+    for f in syslinux/archiso_head.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_pxe-linux.cfg         efiboot/loader/entries/01-archiso-linux.conf efiboot/loader/entries/02-archiso-speech-linux.conf         grub/grub.cfg grub/loopback.cfg airootfs/etc/motd airootfs/etc/issue; do
         [ -f "$ctx/profile/$f" ] || die "expected boot menu file missing: profile/$f"
         sed -i "s/@DISTRO_DISPLAY_NAME@/${DISTRO_NAME^}/g" "$ctx/profile/$f"
     done

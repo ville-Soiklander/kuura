@@ -93,7 +93,7 @@
 # depends=('kvantum') already follows for its own theme engine.
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-installer-config"
 pkgver=0.1.0
-pkgrel=4
+pkgrel=5
 pkgdesc="Calamares installer configuration: branding, settings.conf and module defaults generated/vendored from this project's own design tokens and the real upstream Calamares defaults"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'

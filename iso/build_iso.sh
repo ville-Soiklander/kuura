@@ -129,6 +129,8 @@ BOOT_MENU_FILES=(
     syslinux/archiso_head.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_pxe-linux.cfg
     efiboot/loader/entries/01-archiso-linux.conf efiboot/loader/entries/02-archiso-speech-linux.conf
     grub/grub.cfg grub/loopback.cfg
+    # Live-medium login banners use the same display-name token (see their own files).
+    airootfs/etc/motd airootfs/etc/issue
 )
 
 # stage_context

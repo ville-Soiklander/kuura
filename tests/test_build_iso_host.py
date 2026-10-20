@@ -23,6 +23,8 @@ BOOT_MENU_FILES = [
     "efiboot/loader/entries/02-archiso-speech-linux.conf",
     "grub/grub.cfg",
     "grub/loopback.cfg",
+    "airootfs/etc/motd",
+    "airootfs/etc/issue",
 ]
 
 

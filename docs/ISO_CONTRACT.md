@@ -302,9 +302,16 @@ The two files above were confirmed present and unowned. The diff also found:
   session file (`iso/profile/airootfs/`), enabling root+password SSH login
   as a developer-recon convenience (used throughout this project's own
   session) with no legitimate purpose on an installed desktop.
-- **`/etc/motd`** — unowned; tells the reader to "install Arch Linux" and
-  points at the live-only tools below — actively misleading once the
-  system is already installed.
+- **`/etc/motd`** — unowned; the live medium's own console login message
+  (`iso/profile/airootfs/etc/motd`: "Welcome to the Kuura live system",
+  installer is on the desktop, iwctl/mmcli/DHCP hints). Its name comes from
+  the `@DISTRO_DISPLAY_NAME@` token, substituted at staging by both
+  `iso/build_iso.sh` and `release/build_iso_host.sh` (same list as the boot
+  menus). Misleading once the system is installed, so the `shellprocess`
+  step runs `rm -f /etc/motd`. The `/etc/issue` getty banner
+  (`iso/profile/airootfs/etc/issue`, "Kuura \r (\l)", same token) is
+  deliberately NOT removed: it is not live-specific wording, so the installed
+  system keeps the product name on its login prompt.
 - **Dead live/PXE-only mirror machinery**: `/usr/local/bin/choose-mirror`
   plus its `.service` and enablement symlink — unowned, gated by
   `ConditionKernelCommandLine=mirror`, never true for a Calamares-installed
