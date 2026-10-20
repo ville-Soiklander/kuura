@@ -181,6 +181,11 @@ INSTALL_TIMEOUT_S = 2400.0
 #: action's result" before the actual change has rendered).
 _ACTION_SETTLE_GUARD_S = 0.3
 
+#: Install-click confirmation (see _click_install_and_confirm): bounded retries
+#: instead of a 2400 s wait on a Summary page that never started installing.
+_INSTALL_CLICK_ATTEMPTS = 3
+_INSTALL_CLICK_WAIT_S = 20.0
+
 #: SDDM greeter's password field + "Log In" button, Breeze theme at 1920x1080 -
 #: measured directly against a real post-install boot this phase (same "measured,
 #: not guessed" discipline as every Calamares coordinate above), by pixel-scanning
@@ -1036,6 +1041,72 @@ def log_into_sddm(
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def _click_install_and_confirm(
+    screen: Any,
+    work_dir: Path,
+    anchor_y: int,
+    summary_frame: Path,
+    *,
+    attempts: int = _INSTALL_CLICK_ATTEMPTS,
+    wait_s: float = _INSTALL_CLICK_WAIT_S,
+    guard_s: float = _ACTION_SETTLE_GUARD_S,
+    log: Callable[[str], None] = lambda line: None,
+) -> Path:
+    """
+    Click Install on the Summary page and confirm the wizard really left it.
+
+    WHY: a lost click (pointer event dropped, window not yet focused) leaves the
+    Summary page on screen. Waiting only for "some frame differs from the
+    reference" accepted unrelated changes (pointer redraw, tooltip) as "install
+    started", and the long poll loop then watched a Summary page for the whole
+    install timeout. Page identity (the sidebar highlight, as everywhere else in
+    this module) is the only trustworthy signal, so each attempt is judged by it
+    and a click that did not take is repeated a bounded number of times.
+
+    Args:
+        screen: The QMP client (pointer_click / screendump).
+        work_dir: Scratch directory for settle frames.
+        anchor_y: Sidebar calibration (see _page_at).
+        summary_frame: The last frame, showing the Summary page.
+        attempts: Maximum number of Install clicks (>= 1).
+        wait_s: Seconds to wait for the page change after each click.
+        guard_s: Pause after a click before the first poll.
+        log: Progress sink.
+
+    Returns:
+        The first frame whose sidebar shows the install (or finish) page.
+
+    Raises:
+        WizardError: the wizard still showed another page after every attempt.
+    """
+    reference = summary_frame
+    last_page: str | None = "summary"
+    for attempt in range(1, attempts + 1):
+        screen.pointer_click(*_INSTALL_BUTTON)
+        time.sleep(guard_s)
+        deadline = time.monotonic() + wait_s
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            # frames=1 and a moving reference: the new page may carry animated
+            # content, and an unrelated change must not end the wait - the page
+            # check below decides.
+            polled = _settle_screen(
+                screen, work_dir, interval_s=0.5, frames=1, timeout_s=remaining, reference=reference.read_bytes()
+            )
+            if polled is None:
+                break  # nothing changed at all before the deadline
+            last_page = _page_at(polled, anchor_y)
+            if last_page in ("install", "finish"):
+                return polled
+            reference = polled
+        log(f"install click {attempt}/{attempts} did not leave the summary page (sidebar: {last_page!r})")
+    raise WizardError(
+        f"the Install click had no effect after {attempts} attempts (sidebar still shows {last_page!r})"
+    )
+
+
 def run_install(
     vm: InstallVm,
     credentials: WizardCredentials,
@@ -1269,13 +1340,14 @@ def run_install(
         frame = shot("summary")
         log("summary")
 
-        vm.qmp.pointer_click(*_INSTALL_BUTTON)
-        time.sleep(_ACTION_SETTLE_GUARD_S)
-        # frames=1: only confirming the Install page itself has appeared: its own
-        # progress bar/log text then changes continuously and for real (not a
-        # blink) while the install runs, which the long poll loop below handles
-        # with its own, deliberately stricter settle.
-        frame = settle(30.0, frames=1, reference=frame)
+        try:
+            frame = _click_install_and_confirm(vm.qmp, work_dir, anchor_y, frame, log=log)
+        except WizardError:
+            try:
+                shot("install-click-failed")
+            except WizardError:
+                pass
+            raise
         shot("install-started")
         log("install started")
 

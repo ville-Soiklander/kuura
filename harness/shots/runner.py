@@ -442,7 +442,8 @@ class Runner:
 
         The generated scheme file is written into the desktop user's colour scheme
         directory through the guest agent, activated with ``plasma-apply-colorscheme``
-        and the screen is allowed to settle. (The image never contains the scheme, so it
+        and the screen is allowed to settle. The reset steps run first so the switch
+        happens on an empty desktop. (The image never contains the scheme, so it
         does not depend on the design tokens.)
 
         Args:
@@ -464,6 +465,15 @@ class Runner:
             data = source.read_bytes()
         except OSError:
             raise StepError(f"generated colour scheme {source.name} is missing") from None
+        # WHY reset first: the per-state reset only runs before a state's own steps, so the
+        # previous mode's last window would still be open while Plasma re-themes the desktop.
+        # A window overlapping the bottom shelf makes Plasma regenerate the shelf's shadow
+        # without its bottom part, and that artefact then stays for the whole new mode. The
+        # scheme must always switch on an empty desktop, whatever the state order is.
+        self._run_steps(self._settings.reset, masks, None, "reset step")
+        emptied = self.settle(masks)
+        if not emptied.stable:
+            raise StepError(f"the desktop did not settle before applying mode {mode.name} ({emptied.reason})")
         before = self._snapshot_now("mode-before")
         destination = f"{self._guest.user.home}/.local/share/color-schemes/{scheme_id}.colors"
         self._guest.write_file(destination, data)

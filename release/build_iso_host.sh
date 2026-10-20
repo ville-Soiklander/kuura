@@ -14,6 +14,11 @@
 #   3. Purge stale /var/cache/pacman/pkg/<distro>-*.pkg.tar.zst*: pacman's cache is
 #      keyed by file name, and a rebuilt package with an unchanged name/version was
 #      served stale from it five times in this project.
+#      The same staged pacman.conf is PINNED to the Arch Linux Archive snapshot
+#      ARCH_ARCHIVE_DATE (every uncommented `Include = /etc/pacman.d/mirrorlist` becomes
+#      an archive Server line) and given a dedicated CacheDir inside the scratch dir,
+#      so neither the host's rolling mirrorlist nor its package cache can supply a
+#      newer package (see pin_pacman_conf).
 #   4. Fresh work/ and out/, `mkarchiso -v`, with SOURCE_DATE_EPOCH.
 #   5. Replace the ISO in .build/iso/ and verify the copy's checksum.
 #
@@ -117,12 +122,19 @@ stage_profile() {
         sed -i "s/@DISTRO_NAME@/$DISTRO_NAME/g" "$ctx/profile/$f"
     done
 
+    # Boot menu titles: capitalised display name (same rule as iso/build_iso.sh).
+    for f in syslinux/archiso_head.cfg syslinux/archiso_sys-linux.cfg syslinux/archiso_pxe-linux.cfg         efiboot/loader/entries/01-archiso-linux.conf efiboot/loader/entries/02-archiso-speech-linux.conf         grub/grub.cfg grub/loopback.cfg; do
+        [ -f "$ctx/profile/$f" ] || die "expected boot menu file missing: profile/$f"
+        sed -i "s/@DISTRO_DISPLAY_NAME@/${DISTRO_NAME^}/g" "$ctx/profile/$f"
+    done
+
     # The profile's build-time Server points at the container's /home/builder; on the host
     # it must name the staged copy. Fail if the line is not there, instead of silently
     # building against whatever repository the host happens to have.
     grep -q 'file:///home/builder/repo-src' "$ctx/profile/pacman.conf" ||
         die "profile/pacman.conf has no container repo-src Server line to rewrite"
     sed -i "s#file:///home/builder/repo-src#file://$ctx/repo-src#" "$ctx/profile/pacman.conf"
+    pin_pacman_conf
 
     mkdir -p -- "$ctx/profile/airootfs/srv/repo"
     cp -a -- "$repo/." "$ctx/profile/airootfs/srv/repo/"
@@ -131,6 +143,36 @@ stage_profile() {
     find "$ctx/profile" -type f -exec chmod 0644 {} +
     chmod 0755 -- "$ctx/profile/airootfs/root/customize_airootfs.sh"
     if [ -f "$ctx/profile/airootfs/etc/shadow" ]; then chmod 0600 -- "$ctx/profile/airootfs/etc/shadow"; fi
+}
+
+# pin_pacman_conf
+# Pins the STAGED profile pacman.conf (never any file under /etc) to the archive snapshot.
+#
+# WHY: mkarchiso runs pacstrap with the profile's pacman.conf, whose [core]/[extra]
+# entries Include the HOST's /etc/pacman.d/mirrorlist - on a rolling build host that
+# resolves to current mirrors, so the ISO got newer packages than the snapshot that
+# docs/VERSIONS.md and install-verify's snapshot check promise (linux-api-headers 7.3-1
+# instead of 7.2-1). Every uncommented mirrorlist Include is therefore replaced by the
+# archive Server line, which is the same URL iso/build_iso.sh's container uses.
+#
+# CacheDir: pacstrap is invoked with -c (use the HOST package cache), and the cache is
+# keyed by file name, so a leftover file on the host with the same name could be taken
+# instead of the snapshot's package. A dedicated, freshly created cache inside the
+# scratch dir removes that dependency (cost: packages are downloaded on every run).
+#
+# Fails loudly if the profile has no mirrorlist Include to replace, because that would
+# mean the pin silently did nothing.
+pin_pacman_conf() {
+    local conf="$HOST_BUILD_DIR/ctx/profile/pacman.conf" cache="$HOST_BUILD_DIR/pkgcache" n
+    [[ "$ARCH_ARCHIVE_DATE" =~ ^[0-9]{4}/[0-9]{2}/[0-9]{2}$ ]] || die "invalid ARCH_ARCHIVE_DATE"
+    n="$(grep -c '^[[:space:]]*Include[[:space:]]*=[[:space:]]*/etc/pacman.d/mirrorlist' "$conf" || true)"
+    [ "$n" -gt 0 ] || die "profile/pacman.conf has no mirrorlist Include to pin to the archive"
+    # '$repo' and '$arch' are pacman's own placeholders and must stay literal.
+    sed -i "s#^[[:space:]]*Include[[:space:]]*=[[:space:]]*/etc/pacman.d/mirrorlist.*#Server = https://archive.archlinux.org/repos/${ARCH_ARCHIVE_DATE}/\$repo/os/\$arch#" "$conf"
+    grep -q '^\[options\]' "$conf" || die "profile/pacman.conf has no [options] section"
+    mkdir -p -- "$cache"
+    sed -i "/^\[options\]/a CacheDir = $cache/" "$conf"
+    log "pinned staged pacman.conf to the archive snapshot $ARCH_ARCHIVE_DATE ($n repositories)"
 }
 
 # trust_repo_key

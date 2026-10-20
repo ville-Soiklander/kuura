@@ -5,3 +5,8 @@
 [KDE]
 AnimationDurationFactor=0
 CursorBlinkRate=0
+# Plasma's own default-browser key (KDE reads [General] BrowserApplication besides
+# the XDG mimeapps.list in guest/skel); pinned for the same reason: the image also has
+# the verification-only chromium and the shelf's browser launcher must not flip.
+[General]
+BrowserApplication=firefox.desktop

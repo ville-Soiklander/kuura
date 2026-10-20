@@ -135,6 +135,16 @@ problem:
    `$HOME/$(DISTRO_NAME)_iso_build`, must be on a native Linux filesystem; it is only
    deleted if it carries the script's marker file). `@DISTRO_NAME@` is substituted and
    the build-time `[$(DISTRO_NAME)]` `Server` line is pointed at the staged copy.
+   The staged `pacman.conf` (never a file under `/etc`) is **pinned to the archive
+   snapshot**: every uncommented `Include = /etc/pacman.d/mirrorlist` (`[core]`,
+   `[extra]`) becomes `Server = https://archive.archlinux.org/repos/$(ARCH_ARCHIVE_DATE)/$repo/os/$arch`,
+   the same URL the Podman path uses. Without this the host's rolling mirrorlist was
+   used and the ISO carried newer packages than `docs/VERSIONS.md` states. A missing or
+   malformed `ARCH_ARCHIVE_DATE`, or a profile with no mirrorlist `Include` to pin,
+   stops the build. The staged conf also sets `CacheDir` to `$HOST_BUILD_DIR/pkgcache`:
+   mkarchiso's pacstrap runs with `-c` (host cache) and the cache is keyed by file name,
+   so a dedicated, freshly created cache keeps host leftovers out (packages are
+   downloaded on every run).
 2. Import the repository key into the host keyring and `--lsign-key` it.
 3. Delete stale `/var/cache/pacman/pkg/$(DISTRO_NAME)-*.pkg.tar.zst*`. This is
    mandatory: pacman's cache is keyed by file name and has served stale packages when a

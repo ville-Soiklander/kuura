@@ -19,6 +19,8 @@ from harness.install.wizard import (
     EXTRA_CHARS,
     _SDDM_PASSWORD_FIELD,
     WizardCredentials,
+    WizardError,
+    _click_install_and_confirm,
     _highlighted_row_y,
     _looks_like_desktop,
     _page_at,
@@ -315,3 +317,84 @@ def test_sddm_password_field_coordinate_is_within_full_hd() -> None:
     x, y = _SDDM_PASSWORD_FIELD
     assert 0 <= x < 1920
     assert 0 <= y < 1080
+
+
+# --- _click_install_and_confirm -----------------------------------------------------------
+
+_ANCHOR = 350
+
+
+class FakeInstallScreen:
+    """
+    Screen that shows the Summary page until an Install click is accepted.
+
+    The first `lost_clicks` clicks are dropped (the screen only gets an unrelated
+    pointer-redraw change), later ones switch to the Install page.
+    """
+
+    def __init__(self, tmp_path: Path, lost_clicks: int, accept: bool = True) -> None:
+        self.clicks = 0
+        self._lost = lost_clicks
+        self._accept = accept
+        self._tmp = tmp_path
+        self._noise = 0
+        self.summary = self._page_bytes("summary", 0)
+        self.install = self._page_bytes("install", 0)
+
+    def _page_bytes(self, name: str, variant: int) -> bytes:
+        center = _ANCHOR + _PAGE_ORDER.index(name) * 39
+        path = self._tmp / f"fake-{name}-{variant}.png"
+        make_sidebar_png(path, width=700, height=900 + variant, highlight_rows=(center - 19, center + 19))
+        return path.read_bytes()
+
+    def pointer_click(self, x: int, y: int) -> None:
+        self.clicks += 1
+        self._noise += 1  # an unrelated change (pointer redraw) follows every click
+
+    def screendump(self, path: Path) -> None:
+        if self._accept and self.clicks > self._lost:
+            path.write_bytes(self.install)
+        else:
+            path.write_bytes(self._page_bytes("summary", self._noise))
+
+
+_PAGE_ORDER = ("welcome", "location", "keyboard", "partitions", "users", "summary", "install", "finish")
+
+
+def _summary_frame(screen: FakeInstallScreen, tmp_path: Path) -> Path:
+    frame = tmp_path / "summary-ref.png"
+    frame.write_bytes(screen.summary)
+    return frame
+
+
+def test_install_click_succeeds_first_time(tmp_path: Path) -> None:
+    """An accepted click returns the frame showing the Install page after one click."""
+    screen = FakeInstallScreen(tmp_path, lost_clicks=0)
+    frame = _click_install_and_confirm(
+        screen, tmp_path, _ANCHOR, _summary_frame(screen, tmp_path), wait_s=2.0, guard_s=0.0
+    )
+    assert _page_at(frame, _ANCHOR) == "install"
+    assert screen.clicks == 1
+
+
+def test_install_click_lost_once_is_retried_and_succeeds(tmp_path: Path) -> None:
+    """
+    REGRESSION: a dropped click plus an unrelated screen change used to count as
+    "install started". The click is now repeated until the sidebar leaves Summary.
+    """
+    screen = FakeInstallScreen(tmp_path, lost_clicks=1)
+    frame = _click_install_and_confirm(
+        screen, tmp_path, _ANCHOR, _summary_frame(screen, tmp_path), wait_s=1.5, guard_s=0.0
+    )
+    assert _page_at(frame, _ANCHOR) == "install"
+    assert screen.clicks == 2
+
+
+def test_install_click_never_taking_effect_fails_fast_after_bounded_attempts(tmp_path: Path) -> None:
+    """A click that never works raises WizardError after exactly `attempts` clicks, not after 2400 s."""
+    screen = FakeInstallScreen(tmp_path, lost_clicks=0, accept=False)
+    with pytest.raises(WizardError, match="3 attempts"):
+        _click_install_and_confirm(
+            screen, tmp_path, _ANCHOR, _summary_frame(screen, tmp_path), attempts=3, wait_s=0.6, guard_s=0.0
+        )
+    assert screen.clicks == 3

@@ -842,6 +842,37 @@ def test_apply_mode_writes_the_scheme_activates_it_and_waits_for_the_change(tmp_
     assert desktop.log[2] == ("run-wait", True)
 
 
+def test_apply_mode_runs_the_reset_on_an_empty_desktop_before_switching(tmp_path: Path, clock: FakeClock, desktop: FakeDesktop) -> None:
+    """
+    The reset steps (close every window, wait until gone) run BEFORE the scheme is
+    written and activated, for every mode switch. Otherwise the last window of the
+    previous mode is still open while Plasma regenerates the shelf shadow, and that
+    artefact leaks into every capture of the new mode.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        clock: Fake clock.
+        desktop: Fake desktop.
+
+    Returns:
+        None.
+    """
+    desktop.rules[("run", "plasma-apply-colorscheme")] = [(1.0, b"dark-desktop")]
+    runner = make_runner(tmp_path, desktop, clock, make_settings(reset=RESET))
+    generated = make_generated(tmp_path)
+    runner.apply_mode(Mode("dark", "dark"), generated, "kuura", [])
+    kinds = [entry[0] for entry in desktop.log]
+    assert kinds[:2] == ["key", "key"]
+    assert kinds.index("write") > 1
+    assert kinds.index("run") > kinds.index("write")
+    # A second switch resets again (not only the first one).
+    (generated / "plasma" / "kuura-light.colors").write_bytes(b"[General]\nName=kuura\n")
+    desktop.log.clear()
+    desktop.rules[("run", "plasma-apply-colorscheme")] = [(1.0, b"light-desktop")]
+    runner.apply_mode(Mode("light", "light"), generated, "kuura", [])
+    assert [entry[0] for entry in desktop.log][:2] == ["key", "key"]
+
+
 def test_apply_mode_errors(tmp_path: Path, clock: FakeClock, desktop: FakeDesktop) -> None:
     """
     A missing scheme file (message names only the file), a failing tool and a screen that

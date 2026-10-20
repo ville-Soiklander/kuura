@@ -1,0 +1,11 @@
+# TEST ONLY (screenshot image and install-verify): pin the default browser to Firefox.
+# WHY: the screenshot image carries a second browser (chromium, verification-only) that the
+# product does not ship, and the shelf's browser launcher resolves "the default browser"
+# from whatever the desktop database offers first - so it flipped between Firefox and
+# Chromium from boot to boot. The product does not ship this file (the installed system has
+# only Firefox); the file is the XDG default-application store that xdg-settings, KIO and
+# Plasma's default-browser resolution read.
+[Default Applications]
+x-scheme-handler/http=firefox.desktop
+x-scheme-handler/https=firefox.desktop
+text/html=firefox.desktop
