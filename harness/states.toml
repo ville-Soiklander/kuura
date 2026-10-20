@@ -75,7 +75,7 @@ rtc_base = "2026-09-25T12:00:00"
 reset = [
     { key = "escape" },
     { key = "escape" },
-    { run = ["sh", "-c", "pkill -9 -f '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium'; for n in $(seq 1 100); do pgrep -f '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium' >/dev/null || break; sleep 0.2; done; if pgrep -f '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium' >/dev/null; then echo \"reset: still running after 20s: $(pgrep -f -l '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium')\" >&2; exit 1; fi; for id in 1 2 3 4 5 6; do gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.CloseNotification \"$id\" >/dev/null 2>&1; done; true"], wait_exit = true },
+    { run = ["sh", "-c", "pkill -9 -f '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium|[-]welcome'; for n in $(seq 1 100); do pgrep -f '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium|[-]welcome' >/dev/null || break; sleep 0.2; done; if pgrep -f '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium|[-]welcome' >/dev/null; then echo \"reset: still running after 20s: $(pgrep -f -l '[d]olphin|[s]ystemsettings|[f]irefox|[m]ousepad|[g]tk4-widget-factory|[c]hromium|[-]welcome')\" >&2; exit 1; fi; for id in 1 2 3 4 5 6; do gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications --method org.freedesktop.Notifications.CloseNotification \"$id\" >/dev/null 2>&1; done; true"], wait_exit = true },
     { move = [1280, 700] },
 ]
 
@@ -232,5 +232,20 @@ name = "gtk4-widget-factory"
 description = "GTK4 upstream demo app exercising buttons, entries, spinbuttons, tooltips and popovers; isolates this project's shipped gtk-4.0/gtk.css and gtk-dark.css theme from the already-proven portal mechanism."
 steps = [
     { run = ["gtk4-widget-factory"] },
+    { settle = true },
+]
+
+# First-login welcome window (docs/WELCOME_CONTRACT.md), started WITHOUT --autostart so
+# it opens whatever the ShowAtLogin setting says (the test-only welcomerc in
+# harness/vm/guest/skel keeps it from appearing at login in every other state). The
+# launcher is found by glob because its name carries the distribution name; `exec`
+# makes the launcher the window's process tree root. The reset step above stops it
+# again through the "[-]welcome" pattern (the QML runtime's command line contains the
+# package's data directory).
+[[state]]
+name = "welcome-window"
+description = "First-login welcome window: appearance choice, shortcuts, settings button; the window follows the active light or dark mode."
+steps = [
+    { run = ["sh", "-c", "exec /usr/bin/*-welcome"] },
     { settle = true },
 ]

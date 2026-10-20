@@ -1,0 +1,229 @@
+#!/bin/sh
+# @NAME@-welcome - launcher of the first-login welcome window (docs/WELCOME_CONTRACT.md).
+#
+# Usage: @NAME@-welcome [--autostart]
+#
+# The window itself is plain QML run by Qt's own QML runtime (qml6, shipped by the
+# qt6-declarative package). QML cannot start programs or write files, so this launcher
+# does everything around it:
+#   1. with --autostart it exits 0 without opening anything when the system was booted
+#      from the live medium (see on_live_medium), or when the user switched the
+#      window off ([General] ShowAtLogin=false in ~/.config/@NAME@-welcomerc);
+#   2. it works out the facts the window shows (colour mode, key combinations, the
+#      current ShowAtLogin value) and hands them to the QML as "--name=value" arguments;
+#   3. it performs the three actions the window can ask for. The window reports one
+#      line "WELCOME_ACTION <verb> [argument]" per action; only the exact verbs listed
+#      in perform_action() are honoured, so nothing the QML (or a stray log line)
+#      prints can make this script run anything else.
+#
+# Colour mode: the product switches mode by applying one of its two generated colour
+# schemes, "@NAME@-light" or "@NAME@-dark", with plasma-apply-colorscheme (the same
+# command design-driven tooling such as harness/shots/runner.py uses). That command
+# records the scheme id in [General] ColorScheme of kdeglobals, so the same file is
+# read here. Anything else (missing file or key, another scheme) means light.
+#
+# Test hooks (also useful for packagers): WELCOME_ROOT is a prefix for every system
+# path read below, WELCOME_QML_RUNNER replaces the runner binary.
+
+set -u
+
+NAME='@NAME@'
+NAME_CAP='@NAME_CAP@'
+ROOT="${WELCOME_ROOT-}"
+DATA_DIR="$ROOT/usr/share/$NAME-welcome"
+RUNNER="${WELCOME_QML_RUNNER:-qml6}"
+CONFIG_HOME="${XDG_CONFIG_HOME:-${HOME:-}/.config}"
+RC_NAME="$NAME-welcomerc"
+
+# ini_get FILE GROUP KEY
+# Prints the value of KEY in [GROUP] of a KConfig-style ini file (the last occurrence
+# wins, as in KConfig). Prints nothing when the file, group or key is missing or the
+# file is unreadable; malformed lines are skipped, never fatal.
+ini_get() {
+    [ -r "$1" ] || return 0
+    awk -v group="$2" -v key="$3" '
+        { sub(/\r$/, "") }
+        /^\[/ { in_group = ($0 == "[" group "]"); next }
+        in_group {
+            i = index($0, "=")
+            if (i > 1) {
+                k = substr($0, 1, i - 1)
+                gsub(/^[ \t]+|[ \t]+$/, "", k)
+                if (k == key) {
+                    v = substr($0, i + 1)
+                    gsub(/^[ \t]+|[ \t]+$/, "", v)
+                    found = v
+                    seen = 1
+                }
+            }
+        }
+        END { if (seen) print found }
+    ' "$1" 2>/dev/null || true
+}
+
+# on_live_medium
+# Exit status 0 when this boot is a live archiso session. WHY the marker is the
+# directory /run/archiso: archiso's initramfs hook (mkinitcpio-archiso, hooks/archiso)
+# creates and mounts everything under it (bootmnt, airootfs, cowspace, copytoram) in
+# the initramfs, and /run is a tmpfs recreated empty on every boot. The installed
+# system's initramfs has no archiso hooks (the installer strips the archiso
+# mkinitcpio config, see packages/kuura-installer-config/calamares-defaults/modules/
+# shellprocess.conf) and the installer does not copy /run, so the directory can never
+# exist there. WHY the directory and not bootmnt: with copytoram the medium may be
+# unmounted again, while airootfs stays mounted for the whole session.
+# $ROOT makes the path testable like every other system path here.
+on_live_medium() {
+    [ -d "$ROOT/run/archiso" ]
+}
+
+# show_at_login
+# Exit status 0 when the window should open at login. WHY only an explicit "false"
+# turns it off: a missing file or key, or anything unreadable, must still greet the
+# user (first login has no file at all).
+show_at_login() {
+    value="$(ini_get "$CONFIG_HOME/$RC_NAME" General ShowAtLogin | tr 'A-Z' 'a-z')"
+    [ "$value" != "false" ]
+}
+
+# detect_mode
+# Prints "dark" when the active colour scheme is this product's dark scheme, else
+# "light" (see the header for how the mode is recorded).
+detect_mode() {
+    scheme="$(ini_get "$CONFIG_HOME/kdeglobals" General ColorScheme)"
+    [ -n "$scheme" ] || scheme="$(ini_get "$ROOT/etc/xdg/kdeglobals" General ColorScheme)"
+    if [ "$scheme" = "$NAME-dark" ]; then
+        printf 'dark\n'
+    else
+        printf 'light\n'
+    fi
+}
+
+# first_binding VALUE
+# Reduces a shortcut value to the first key combination and strips everything that
+# is not part of a combination. KGlobalAccel stores "active<TAB>alt,default,label"
+# and desktop files "first,second,label"; "none" and empty mean unbound. The
+# character filter keeps the value safe as a command line argument and as UI text.
+first_binding() {
+    printf '%s\n' "$1" | cut -d, -f1 | cut -f1 | tr -cd 'A-Za-z0-9+_ -' | sed 's/^ *//; s/ *$//' \
+        | awk '{ if (tolower($0) == "none") print ""; else print $0 }'
+}
+
+# lookup_binding GROUP KEY
+# Looks KEY up in [GROUP] of the user's kglobalshortcutsrc, then of the one the
+# product ships in /etc/skel. GROUP is the literal text between the outermost
+# brackets. Exit status 0 when some file sets the key (the combination is printed;
+# empty when it is deliberately unbound), 1 when no file mentions it. WHY the
+# distinction: a user who unbound a shortcut must not be shown the default again.
+lookup_binding() {
+    for file in "$CONFIG_HOME/kglobalshortcutsrc" "$ROOT/etc/skel/.config/kglobalshortcutsrc"; do
+        raw="$(ini_get "$file" "$1" "$2")"
+        if [ -n "$raw" ]; then
+            first_binding "$raw"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# search_binding
+# Key combination that opens search (KRunner). Falls back to the upstream default
+# that KRunner itself declares in its desktop file, which is where the product
+# relies on it (packages/kuura-shell/skel/.config/kglobalshortcutsrc leaves it alone).
+search_binding() {
+    lookup_binding 'services][org.kde.krunner.desktop' _launch && return 0
+    first_binding "$(ini_get "$ROOT/usr/share/kglobalaccel/org.kde.krunner.desktop" 'Desktop Entry' X-KDE-Shortcuts)"
+}
+
+# overview_binding
+# Key combination of the Overview effect. Falls back to the upstream default recorded
+# in shortcut-defaults.conf: KWin compiles its default in, so no installed file
+# declares it (a test keeps the recorded value honest).
+overview_binding() {
+    lookup_binding kwin Overview && return 0
+    first_binding "$(ini_get "$DATA_DIR/shortcut-defaults.conf" kwin Overview)"
+}
+
+# perform_action ACTION
+# Carries out one action reported by the window. Unknown actions are ignored.
+# Every command gets /dev/null as stdin: this runs inside the loop that reads the
+# window's output, and a command must not swallow the lines that follow.
+perform_action() {
+    case "$1" in
+        'scheme light')
+            plasma-apply-colorscheme "$NAME-light" </dev/null >/dev/null 2>&1 ;;
+        'scheme dark')
+            plasma-apply-colorscheme "$NAME-dark" </dev/null >/dev/null 2>&1 ;;
+        'show-at-login true')
+            kwriteconfig6 --file "$RC_NAME" --group General --key ShowAtLogin true </dev/null >/dev/null 2>&1 ;;
+        'show-at-login false')
+            kwriteconfig6 --file "$RC_NAME" --group General --key ShowAtLogin false </dev/null >/dev/null 2>&1 ;;
+        'settings')
+            # Detached and with all three streams closed so the output pipe of the
+            # window is not kept open after the window itself has closed.
+            systemsettings </dev/null >/dev/null 2>&1 & ;;
+        *) ;;
+    esac
+}
+
+# handle_output
+# Reads the window's combined output. Action lines are performed, the final
+# "WELCOME_EXIT <status>" marker (written by run_window) sets the exit status, and
+# everything else (Qt warnings) is passed on to stderr.
+handle_output() {
+    status=0
+    while IFS= read -r line; do
+        case "$line" in
+            *'WELCOME_ACTION '*) perform_action "${line#*WELCOME_ACTION }" ;;
+            'WELCOME_EXIT '*) status="${line#WELCOME_EXIT }" ;;
+            *) printf '%s\n' "$line" >&2 ;;
+        esac
+    done
+    case "$status" in
+        '' | *[!0-9]*) status=1 ;;
+    esac
+    exit "$status"
+}
+
+# run_window
+# Starts the QML runtime on the window and routes its output through handle_output.
+run_window() {
+    # QML's console.log goes to stderr only when asked to (otherwise it may go to
+    # the journal or nowhere), and the plain message pattern keeps action lines free
+    # of prefixes.
+    export QT_FORCE_STDERR_LOGGING=1
+    export QT_MESSAGE_PATTERN='%{message}'
+    # WHY --app-domain: Qt Wayland announces "<reversed domain>.qml" as the application
+    # id, and the QML sets the domain from this value before it shows the window. The
+    # menu entry names the result in StartupWMClass, so the shelf shows its icon
+    # instead of the QML runtime's. The value has no dot, so it is not reversed.
+    show=true
+    show_at_login || show=false
+    {
+        "$RUNNER" "$DATA_DIR/Welcome.qml" -- \
+            "--title=Welcome to $NAME_CAP"             "--app-domain=$NAME-welcome" \
+            "--mode=$(detect_mode)" \
+            "--search=$(search_binding)" \
+            "--overview=$(overview_binding)" \
+            "--show-at-login=$show" 2>&1
+        printf 'WELCOME_EXIT %s\n' "$?"
+    } | handle_output
+}
+
+autostart=0
+case "$#:${1-}" in
+    0:) ;;
+    1:--autostart) autostart=1 ;;
+    *)
+        printf 'Usage: %s-welcome [--autostart]\n' "$NAME" >&2
+        exit 2
+        ;;
+esac
+
+# WHY the live check comes first: it needs no config read, and in the live session
+# the window would only push the installer window aside.
+if [ "$autostart" -eq 1 ]; then
+    on_live_medium && exit 0
+    show_at_login || exit 0
+fi
+
+run_window

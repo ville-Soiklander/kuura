@@ -16,8 +16,8 @@
 # so dialogs and pop-ups of these applications keep their natural placement.
 
 [General]
-count=4
-rules=1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a01,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a02,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a03,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a04
+count=5
+rules=1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a01,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a02,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a03,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a04,1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a05
 
 [1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a01]
 Description=Harness: file manager window geometry
@@ -62,3 +62,15 @@ types=1
 wmclass=mousepad
 wmclasscomplete=false
 wmclassmatch=1
+
+# The welcome window (docs/WELCOME_CONTRACT.md) is plain QML run by the QML runtime, so its
+# application id is the runtime's, not the product's; it is matched by its title
+# ("Welcome to <name>") instead: titlematch 2 = substring, so the rule does not depend on
+# the distribution name. Only the position is forced, the window has a fixed size itself.
+[1a4f7c60-2b8e-4d51-9c3a-0e6d5b7f1a05]
+Description=Harness: welcome window position
+position=420,110
+positionrule=2
+title=Welcome to
+titlematch=2
+types=1

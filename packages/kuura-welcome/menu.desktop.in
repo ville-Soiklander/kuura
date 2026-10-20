@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Welcome
+Comment=Appearance, shortcuts and settings at a glance
+Exec=@NAME@-welcome
+Icon=help-about
+Categories=Utility;
+StartupWMClass=@NAME@-welcome.qml
+Terminal=false

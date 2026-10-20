@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Welcome to @NAME_CAP@
+Comment=Greets new users at login
+Exec=@NAME@-welcome --autostart
+OnlyShowIn=KDE;
+NoDisplay=true
+Terminal=false

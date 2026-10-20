@@ -74,6 +74,11 @@ depends=(
     # packages/kuura-shell/skel/.config/kdeglobals's own LookAndFeelPackage
     # comment.
     "${DISTRO_NAME}-lookandfeel"
+    # First-login welcome window (Vaihe 8, a package of this monorepo,
+    # docs/WELCOME_CONTRACT.md): light/dark choice, search and overview
+    # shortcuts, a settings button. Built from the same DISTRO_NAME variable as
+    # this package's own name; autostarts once per login unless the user turns it off.
+    "${DISTRO_NAME}-welcome"
     # Audio and network applets
     'plasma-nm'
     'plasma-pa'

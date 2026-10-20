@@ -20,7 +20,7 @@
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-frost"
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Glass 'material' KWin compositor effect (background blur reuse, edge refraction, specular highlight, dither noise)"
 # Unlike kuura-desktop/kuura-shell (arch=('any'): pure config/scripts), this
 # package compiles a native .so against KWin's C++ effect ABI, which is NOT
@@ -28,9 +28,12 @@ pkgdesc="Glass 'material' KWin compositor effect (background blur reuse, edge re
 # the pinned snapshot's kwin/qt6-base/kcoreaddons, hence a real architecture.
 arch=('x86_64')
 url='https://github.com/ville-Soiklander/kuura'
-# Code, configuration and scripts of the project are GPL-3.0-or-later (see
-# LICENSE and LICENSES/README.md).
-license=('GPL-3.0-or-later')
+# GPL-2.0-or-later, unlike the project's GPL-3.0-or-later default: this is a
+# KWin effect plugin that links against KWin's own GPL-2.0-or-later code, so it
+# is licensed for compatibility with KWin (distro-tyonkulku.md 1.6; see also
+# LICENSES/README.md). GPL-2.0-or-later is an SPDX id covered by Arch's
+# `licenses` package, so no licence text needs to be installed.
+license=('GPL-2.0-or-later')
 # kwin: the compositor this plugin loads into at runtime (metadata.json is
 # read by KWin's own effect loader; the compiled .so is installed under its
 # plugin search path -- see package() below).

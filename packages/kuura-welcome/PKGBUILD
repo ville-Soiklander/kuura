@@ -1,0 +1,71 @@
+# First-login welcome window (docs/WELCOME_CONTRACT.md): a small plain-QML window run
+# by Qt's own QML runtime, started by a POSIX sh launcher. No compiled code, so
+# arch=('any'). Colours, radii, spacing and type come from the tokens the build
+# generates from this repository's design/tokens.json (both modes), never from
+# values typed into the QML.
+#
+# The package name comes from the environment (DISTRO_NAME, see .env.example), the
+# same convention every other package of this monorepo uses; building by hand
+# without it fails with a clear error. makepkg is run through build/build_repo.sh,
+# which exports the variable.
+
+pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-welcome"
+pkgver=0.1.0
+pkgrel=3
+pkgdesc="First-login welcome window: appearance, shortcuts and settings"
+arch=('any')
+url='https://github.com/ville-Soiklander/kuura'
+# Themes, configuration and scripts of the project are GPL-3.0-or-later (see LICENSE
+# and LICENSES/README.md).
+license=('GPL-3.0-or-later')
+# qt6-declarative: ships the QML runtime (/usr/bin/qml6) and QtQuick/Controls/Layouts.
+# qt6-wayland: the session is Wayland; the runtime needs the platform plugin there.
+# kconfig: kwriteconfig6 stores the "show at login" setting.
+# plasma-workspace: plasma-apply-colorscheme, the product's own mode switch.
+# systemsettings: opened by the Settings button.
+# All five are already in the pinned snapshot and pulled in by plasma-desktop.
+depends=('qt6-declarative' 'qt6-wayland' 'kconfig' 'plasma-workspace' 'systemsettings')
+# python: build() runs design/generate.py through its `python -m` CLI.
+makedepends=('python')
+
+# build(): generate the two token singletons (qml/Tokens-light.qml, Tokens-dark.qml)
+# with the LOCKED design/generate.py CLI - nothing here parses tokens.json - and
+# render the sibling *.in templates with sed (the same "@NAME@" substitution
+# packages/kuura-sddm uses; NAME_CAP is the capitalised distribution name shown in
+# the UI). design.generate's PROJECT_ROOT is three directories up from the build
+# directory, and --out-dir must stay inside it (a path-traversal guard there).
+build() {
+    ( cd "$srcdir/../../.." && python3 -m design.generate \
+        --out-dir "$srcdir/generated" --name "$DISTRO_NAME" )
+
+    local name_cap="${DISTRO_NAME^}" tmp template
+    tmp="$(mktemp)"
+    for template in welcome.sh autostart.desktop menu.desktop; do
+        sed -e "s/@NAME_CAP@/${name_cap}/g" -e "s/@NAME@/${DISTRO_NAME}/g" \
+            "$srcdir/../${template}.in" > "$tmp"
+        cp "$tmp" "$srcdir/${template}"
+    done
+    rm -f "$tmp"
+}
+
+# package(): the QML tree lives in /usr/share/<name>-welcome/. Each mode gets its own
+# directory holding the generated singleton (installed as Tokens.qml) next to the same
+# qmldir, because a QML singleton is declared per directory.
+package() {
+    local generated="$srcdir/generated/qml"
+    local share="$pkgdir/usr/share/${DISTRO_NAME}-welcome"
+    local mode
+
+    install -Dm755 "$srcdir/welcome.sh" "$pkgdir/usr/bin/${DISTRO_NAME}-welcome"
+    install -Dm644 "$srcdir/../qml/Welcome.qml" "$share/Welcome.qml"
+    for mode in light dark; do
+        install -Dm644 "$generated/Tokens-${mode}.qml" "$share/tokens/${mode}/Tokens.qml"
+        install -Dm644 "$srcdir/../qml/tokens/qmldir" "$share/tokens/${mode}/qmldir"
+    done
+    install -Dm644 "$srcdir/../shortcut-defaults.conf" "$share/shortcut-defaults.conf"
+
+    install -Dm644 "$srcdir/autostart.desktop" \
+        "$pkgdir/etc/xdg/autostart/${DISTRO_NAME}-welcome.desktop"
+    install -Dm644 "$srcdir/menu.desktop" \
+        "$pkgdir/usr/share/applications/${DISTRO_NAME}-welcome.desktop"
+}

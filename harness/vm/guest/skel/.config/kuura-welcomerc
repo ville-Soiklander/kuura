@@ -1,0 +1,5 @@
+# TEST ONLY (screenshot image and install-verify): keep the first-login welcome window from
+# appearing at login, so it is in none of the other states. The product does not ship this
+# file (docs/WELCOME_CONTRACT.md); the file name carries the distribution name.
+[General]
+ShowAtLogin=false

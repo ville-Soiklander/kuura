@@ -72,15 +72,23 @@
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-assets"
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Icon set, wallpapers and UI sounds generated from design/tokens.json"
 arch=('any')
 url='https://github.com/ville-Soiklander/kuura'
-# Code, configuration and this package's own generated assets are
-# GPL-3.0-or-later (see LICENSE and LICENSES/README.md). The assets
-# themselves are this project's own procedural output (see docs/ASSETS.md),
-# not a third-party work with its own separate license.
-license=('GPL-3.0-or-later')
+# Two licences apply, written as one SPDX expression (current Arch packaging
+# guideline: SPDX identifiers, combined with AND when several apply):
+# - CC-BY-SA-4.0: the project's own generated icons (*.svg), wallpapers
+#   (*.png) and UI sounds (*.wav) - everything under /usr/share/backgrounds/,
+#   /usr/share/sounds/ and the .svg files under /usr/share/icons/ (this
+#   project's own procedural output, see docs/ASSETS.md; distro-tyonkulku.md
+#   1.6).
+# - GPL-3.0-or-later: the two generated index.theme configuration files, and
+#   the generator code under design/ that produces the assets (the generator
+#   is not installed by this package).
+# CC-BY-SA-4.0 is a non-GPL licence whose text is not guaranteed on every
+# system, so package() installs it into /usr/share/licenses/<pkgname>/.
+license=('CC-BY-SA-4.0 AND GPL-3.0-or-later')
 # breeze-icons: this theme's own index.theme sets Inherits=breeze (see SCOPE
 # above), so every icon this package does not itself provide must still
 # resolve through a real, installed fallback theme.
@@ -116,6 +124,13 @@ package() {
     local wallpapers="$srcdir/generated-wallpapers/wallpapers"
     local sounds="$srcdir/generated-sounds/sounds"
     local theme_dir="$pkgdir/usr/share/icons/${DISTRO_NAME}"
+    # LICENSES/CC-BY-SA-4.0.txt sits at the repo root, three levels above
+    # $srcdir (same navigation as build()).
+    local license_text="$srcdir/../../../LICENSES/CC-BY-SA-4.0.txt"
+
+    # The licence text for the CC-BY-SA-4.0 assets; Arch requires non-common
+    # licences to be installed under /usr/share/licenses/<pkgname>/.
+    install -Dm644 "$license_text"         "$pkgdir/usr/share/licenses/$pkgname/CC-BY-SA-4.0.txt"
 
     # ---- Icons: real freedesktop icon-naming-spec names, one context
     # subdirectory per icon (apps/places/mimetypes - the spec's own division,

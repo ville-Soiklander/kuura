@@ -60,6 +60,9 @@ RUN useradd --create-home --shell /bin/bash builder \
 WORKDIR /home/builder
 COPY --chown=builder:builder packages/ packages/
 COPY --chown=builder:builder design/ design/
+# LICENSES/ for the same reason: packages/kuura-assets installs the CC-BY-SA-4.0
+# text from the repository root into /usr/share/licenses/<pkgname>/.
+COPY --chown=builder:builder LICENSES/ LICENSES/
 COPY --chown=builder:builder --chmod=0755 build/ build/
 
 USER builder
