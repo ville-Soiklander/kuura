@@ -433,11 +433,13 @@ std::optional<KWin::RegionF> Frost::glassRegion(KWin::EffectWindow *window) cons
                     content = KWin::RegionF();
                 } else if (cardinals->size() % 4 == 0) {
                     KWin::RegionF region;
-                    for (size_t i = 0; i + 3 < cardinals->size(); i += 4) {
-                        const int x = static_cast<int>((*cardinals)[i]);
-                        const int y = static_cast<int>((*cardinals)[i + 1]);
-                        const int w = static_cast<int>((*cardinals)[i + 2]);
-                        const int h = static_cast<int>((*cardinals)[i + 3]);
+                    // A running iterator instead of [i + n] indexing: the size is a
+                    // multiple of 4 (checked above), so each pass reads one whole quad.
+                    for (auto it = cardinals->begin(); it != cardinals->end();) {
+                        const int x = static_cast<int>(*it++);
+                        const int y = static_cast<int>(*it++);
+                        const int w = static_cast<int>(*it++);
+                        const int h = static_cast<int>(*it++);
                         region += KWin::Xcb::fromXNative(KWin::Rect(x, y, w, h));
                     }
                     content = region;
@@ -654,7 +656,7 @@ void Frost::refractBackdrop(const KWin::RenderTarget &renderTarget, const KWin::
     // displacement is non-zero; +1 px covers the falloff's last fractional
     // pixel. Everything here is bbox-local DEVICE pixels, top-left origin,
     // which is the coordinate frame Blur's on-screen pass uses too. ----
-    const float falloff = static_cast<float>(Kuura::Tokens::kMaterialRefractionEdgeFalloff);
+    const auto falloff = static_cast<float>(Kuura::Tokens::kMaterialRefractionEdgeFalloff);
     const int bandDevice = static_cast<int>(std::ceil(falloff)) + 1;
     const KWin::Rect localDeviceRect(0, 0, scaledBackgroundRect.width(), scaledBackgroundRect.height());
     KWin::Region band(localDeviceRect);
@@ -738,8 +740,9 @@ void Frost::refractBackdrop(const KWin::RenderTarget &renderTarget, const KWin::
         return;
     }
     {
-        auto vertices = *mapped;
-        size_t index = 0;
+        // The buffer was mapped for exactly 6 vertices per rect, so a running
+        // iterator walks it without index arithmetic.
+        auto out = mapped->begin();
         const auto width = static_cast<float>(copySize.width());
         const auto height = static_cast<float>(copySize.height());
         for (const KWin::Rect &rect : effective.rects()) {
@@ -751,12 +754,12 @@ void Frost::refractBackdrop(const KWin::RenderTarget &renderTarget, const KWin::
                 return KWin::GLVertex2D{.position = QVector2D(x, y), .texcoord = QVector2D(x / width, 1.0F - y / height)};
             };
             // Two triangles per rect, same winding as blur.cpp.
-            vertices[index++] = vertex(x0, y0);
-            vertices[index++] = vertex(x1, y1);
-            vertices[index++] = vertex(x0, y1);
-            vertices[index++] = vertex(x0, y0);
-            vertices[index++] = vertex(x1, y0);
-            vertices[index++] = vertex(x1, y1);
+            *out++ = vertex(x0, y0);
+            *out++ = vertex(x1, y1);
+            *out++ = vertex(x0, y1);
+            *out++ = vertex(x0, y0);
+            *out++ = vertex(x1, y0);
+            *out++ = vertex(x1, y1);
         }
     }
     vbo->unmap();

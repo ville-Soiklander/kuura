@@ -38,6 +38,10 @@ Checks: >
   -readability-magic-numbers,
   -modernize-use-trailing-return-type
 
-WarningsAsErrors: ""
+# Every enabled check is an error: clang-tidy then exits non-zero on any finding, which is
+# what lets `run_static_analysis.ps1 -FailOnFindings` fail on C++ findings at all (with
+# warnings only, clang-tidy exits 0 and findings pass silently). A finding that is a
+# genuine false positive gets a NOLINT with a reason, never a relaxed check here.
+WarningsAsErrors: "*"
 HeaderFilterRegex: '.*packages/kuura-.*/src/.*'
 FormatStyle: none
