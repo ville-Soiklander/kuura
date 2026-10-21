@@ -86,6 +86,18 @@ def test_decoration_selects_the_own_cpp_plugin() -> None:
     assert group["BorderSizeAuto"] == "false"
 
 
+def test_colour_switch_crossfade_is_disabled() -> None:
+    """
+    KWin's blendchanges effect must be off for new users.
+
+    When the shell recolours a panel during that crossfade, KWin sometimes never
+    repaints the panel afterwards, and it keeps the old colours (stale icons and glass)
+    for a minute or more. Measured in the screenshot harness: 6 of 32 light/dark
+    switches left a stale panel with the effect loaded, 0 of 18 without it.
+    """
+    assert _kwinrc()["Plugins"]["blendchangesEnabled"] == "false"
+
+
 def test_decoration_does_not_drop_the_button_layout() -> None:
     """Selecting the theme keeps close, minimize, maximize on the left and nothing on the right."""
     group = _kwinrc()["org.kde.kdecoration2"]

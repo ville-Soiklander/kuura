@@ -87,6 +87,17 @@ BorderSizeAuto=false
 [Windeco]
 RoundedCorners=true
 
+# ---- No crossfade on a colour scheme switch [Plugins] ----
+# blendchanges (enabled by default) crossfades from a snapshot of the old screen when the
+# colour scheme changes. If the shell recolours a panel while that crossfade runs, KWin
+# sometimes never repaints the panel afterwards: it keeps the old icons and glass tint
+# until something else repaints it (a minute or more for the shelf). Found and measured
+# in the screenshot harness on 2026-10-21: 6 of 32 light switches left a stale panel with
+# the effect loaded, 0 of 18 with it unloaded (docs/HARNESS_CONTRACT.md). The switch
+# itself stays; only the soft fade is lost. <id>Enabled is KWin's standard per-effect key.
+[Plugins]
+blendchangesEnabled=false
+
 # ---- Overview effect tuning [Effect-overview] ----
 # This is the real, confirmed config group: kwriteconfig6 writes to it and
 # `cat kwinrc` reads the value straight back after a reconfigure (unlike the

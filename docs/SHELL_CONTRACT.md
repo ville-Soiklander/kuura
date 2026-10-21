@@ -191,6 +191,17 @@ dark scheme restyles title bar, caption, outline and shadow immediately; shadow 
 floating window and none when maximized; title bar drags, double click maximizes, the top
 strip resizes; maximize dimmed on a fixed-size window.
 
+## Colour scheme switch without crossfade (kuura-shell 0.1.0-6)
+
+The skel `kwinrc` sets `[Plugins] blendchangesEnabled=false`. KWin's `blendchanges`
+effect crossfades from a snapshot of the old screen when the colour scheme changes; if
+the shell recolours a panel during that fade, KWin sometimes never repaints the panel
+and keeps the old icons and glass tint (the shelf for over a minute). Found by the
+screenshot harness on 2026-10-21: 6 of 32 light switches left a stale panel with the
+effect loaded, 0 of 18 without it (docs/HARNESS_CONTRACT.md). The switch itself is
+unchanged; only the soft fade is gone. The upstream defect (KWin/plasmashell) is not
+fixed by this; the setting avoids triggering it. Existing accounts keep their own kwinrc.
+
 ## Dark mode: Kvantum and GTK4/libadwaita (verified)
 
 The two open questions from the "Package: `packages/kuura-shell/`" section above were
