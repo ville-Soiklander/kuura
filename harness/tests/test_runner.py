@@ -78,6 +78,12 @@ class FakeDesktop:
         execs: Every ``exec`` argument list in order (root commands, kept apart from
             ``log`` so the user-visible action order stays easy to assert).
         exec_error: If set, ``exec`` raises it (an agent that does not answer).
+        kwin_effects: Effects KWin has loaded; ``gdbus`` calls to KWin's ``/Effects``
+            object unload and query them (the crossfade ``blendchanges`` is loaded at
+            the start, as in the real session).
+        crossfade_rules: Picture changes of ``plasma-apply-colorscheme`` while the
+            crossfade effect is still loaded, used instead of ``rules`` when set
+            (the stale panel it can leave behind).
     """
 
     def __init__(self, clock: FakeClock, content: bytes = b"desktop") -> None:
@@ -96,18 +102,21 @@ class FakeDesktop:
         self.packages: set[str] = {"kuura-desktop"}
         self.execs: list[list[str]] = []
         self.exec_error: Exception | None = None
+        self.kwin_effects: set[str] = {"blendchanges"}
+        self.crossfade_rules: list[tuple[float, bytes]] | None = None
         self._pending: list[tuple[float, bytes]] = []
 
-    def _act(self, kind: str, value: Any) -> None:
+    def _act(self, kind: str, value: Any, changes: list[tuple[float, bytes]] | None = None) -> None:
         """
         Record an action and schedule the picture changes it causes.
 
         Args:
             kind: Action kind (``key``, ``run`` ...).
             value: Its value.
+            changes: The changes to schedule; ``rules[(kind, value)]`` when None.
         """
         self.log.append((kind, value))
-        for delay, content in self.rules.get((kind, value), []):
+        for delay, content in changes if changes is not None else self.rules.get((kind, value), []):
             self._pending.append((self.clock.now + delay, content))
 
     def screendump(self, path: Path) -> None:
@@ -180,12 +189,23 @@ class FakeDesktop:
             timeout: Ignored.
 
         Returns:
-            An ``ExecResult`` when waiting, else None.
+            An ``ExecResult`` when waiting, else None. A KWin ``isEffectLoaded`` query
+            answers on stdout the way gdbus prints it.
         """
-        self._act("run", argv[0])
+        stdout = ""
+        changes = None
+        if argv[0] == "gdbus" and "/Effects" in argv:
+            method, effect = argv[-2], argv[-1]
+            if method.endswith(".unloadEffect"):
+                self.kwin_effects.discard(effect)
+            elif method.endswith(".isEffectLoaded"):
+                stdout = "(true,)" if effect in self.kwin_effects else "(false,)"
+        elif argv[0] == "plasma-apply-colorscheme" and "blendchanges" in self.kwin_effects:
+            changes = self.crossfade_rules
+        self._act("run", argv[0], changes)
         self.log.append(("run-wait", wait_exit))
         if wait_exit:
-            return ExecResult(self.exit_codes.get(argv[0], 0), "", "")
+            return ExecResult(self.exit_codes.get(argv[0], 0), stdout, "")
         return None
 
     def exec(self, argv: list[str], timeout: float = 20.0) -> ExecResult:
@@ -514,6 +534,160 @@ def test_settle_ignores_a_probe_that_fails_but_not_a_lost_connection(tmp_path: P
 
     with pytest.raises(ConnectionError):
         make_runner(tmp_path, desktop, clock, make_settings(), cpu_probe=gone).settle([])
+
+
+def disk_bound_cpu(clock: FakeClock, waiting: Callable[[], bool], iowait_fraction: float = 0.3) -> Callable[[], tuple[int, int, int]]:
+    """
+    Build a fake CPU probe for a guest in which a process may be waiting on the disk.
+
+    The CPUs are almost idle the whole time (1 % busy), but while ``waiting()`` is true a
+    process sits in uninterruptible disk sleep, so that share of the time is I/O wait.
+    This is what a cold, slow guest disk looks like from ``/proc/stat``.
+
+    Args:
+        clock: The fake clock (the counters grow with the elapsed fake time).
+        waiting: Tells whether the disk wait is still going on at the time of a reading.
+        iowait_fraction: Share of I/O wait while it lasts.
+
+    Returns:
+        A probe returning cumulative ``(busy, idle, iowait)`` counters.
+    """
+    counters = {"at": clock.now, "busy": 0.0, "idle": 0.0, "iowait": 0.0}
+
+    def probe() -> tuple[int, int, int]:
+        elapsed = clock.now - counters["at"]
+        counters["at"] = clock.now
+        share = iowait_fraction if waiting() else 0.0
+        counters["busy"] += 100 * elapsed * 0.01
+        counters["iowait"] += 100 * elapsed * share
+        counters["idle"] += 100 * elapsed * (0.99 - share)
+        return round(counters["busy"]), round(counters["idle"]), round(counters["iowait"])
+
+    return probe
+
+
+def test_a_scheme_switch_is_not_captured_while_the_shell_still_waits_on_the_disk(tmp_path: Path, clock: FakeClock, desktop: FakeDesktop) -> None:
+    """
+    Regression (gpu mode, light ``desktop-empty`` captured with the stock blue shelf icons):
+    a colour scheme switch repaints in two steps. The shelf background is recoloured at
+    once, then the shell reloads its icons with the new colours, and on a cold guest disk
+    (first boot after the image was rebuilt) it sits in disk sleep for seconds first. In
+    between the screen is still and the CPUs are idle, so the half-recoloured desktop used
+    to count as settled and was captured. I/O wait must keep the settle going until the
+    icons are done.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        clock: Fake clock.
+        desktop: Fake desktop.
+
+    Returns:
+        None.
+    """
+    final = b"shelf-and-icons-recoloured"
+    desktop.rules[("run", "plasma-apply-colorscheme")] = [(1.0, b"shelf-recoloured"), (8.0, final)]
+
+    # The shell is in disk sleep from the switch until its icons are repainted.
+    def icons_pending() -> bool:
+        return any(content == final for _, content in desktop._pending)
+
+    runner = make_runner(tmp_path, desktop, clock, make_settings(timeout=30), cpu_probe=disk_bound_cpu(clock, icons_pending))
+    generated = make_generated(tmp_path)
+    (generated / "plasma" / "kuura-light.colors").write_bytes(b"[General]\nName=kuura\n")
+    assert runner.apply_mode(Mode("light", "light"), generated, "kuura", []).stable
+    shot = tmp_path / "out" / "light" / "desktop-empty.png"
+    shot.parent.mkdir(parents=True)
+    result = runner.run_state(state("desktop-empty"), Mode("light", "light"), [], shot, "light/desktop-empty.png")
+    assert result.status == "ok"
+    assert shot.read_bytes() == final
+
+
+def test_a_scheme_switch_runs_without_the_crossfade_that_can_leave_a_stale_panel(tmp_path: Path, clock: FakeClock, desktop: FakeDesktop) -> None:
+    """
+    Regression (gpu mode, light ``desktop-empty`` captured with stale panels: stock blue
+    shelf icons and untinted glass): while KWin's ``blendchanges`` crossfade runs, the
+    shell's panel repaint can be lost, and the screen then stays on a stale picture that
+    no settle can wait out. The switch must run with the crossfade unloaded, so the
+    captured desktop is the recoloured one.
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        clock: Fake clock.
+        desktop: Fake desktop.
+
+    Returns:
+        None.
+    """
+    final = b"panels-recoloured"
+    desktop.rules[("run", "plasma-apply-colorscheme")] = [(1.0, final)]
+    # With the crossfade loaded the panels never get past the stale picture.
+    desktop.crossfade_rules = [(1.0, b"stale-panels")]
+    runner = make_runner(tmp_path, desktop, clock, make_settings(timeout=30))
+    generated = make_generated(tmp_path)
+    (generated / "plasma" / "kuura-light.colors").write_bytes(b"[General]\nName=kuura\n")
+    assert runner.apply_mode(Mode("light", "light"), generated, "kuura", []).stable
+    shot = tmp_path / "out" / "light" / "desktop-empty.png"
+    shot.parent.mkdir(parents=True)
+    result = runner.run_state(state("desktop-empty"), Mode("light", "light"), [], shot, "light/desktop-empty.png")
+    assert result.status == "ok"
+    assert shot.read_bytes() == final
+    assert "blendchanges" not in desktop.kwin_effects
+
+
+def test_apply_mode_fails_when_the_crossfade_cannot_be_disabled(tmp_path: Path, clock: FakeClock, desktop: FakeDesktop) -> None:
+    """
+    A KWin that does not answer, or still reports the crossfade loaded, is a StepError
+    before the scheme is switched (a capture with the crossfade could be stale).
+
+    Args:
+        tmp_path: Pytest temporary directory.
+        clock: Fake clock.
+        desktop: Fake desktop.
+
+    Returns:
+        None.
+    """
+    desktop.rules[("run", "plasma-apply-colorscheme")] = [(1.0, b"dark-desktop")]
+    runner = make_runner(tmp_path, desktop, clock, make_settings())
+    generated = make_generated(tmp_path)
+    desktop.exit_codes["gdbus"] = 1
+    with pytest.raises(StepError, match="crossfade"):
+        runner.apply_mode(Mode("dark", "dark"), generated, "kuura", [])
+    assert ("run", "plasma-apply-colorscheme") not in desktop.log
+
+    # The call succeeds but the effect stays loaded (the unload did not take).
+    desktop.exit_codes.clear()
+    desktop.kwin_effects = {"blendchanges"}
+    original = desktop.run_as_user
+
+    def unload_ignored(argv: list[str], wait_exit: bool = False, timeout: float = 30.0) -> ExecResult | None:
+        if argv[-2].endswith(".unloadEffect"):
+            return ExecResult(0, "()", "")
+        return original(argv, wait_exit, timeout)
+
+    desktop.run_as_user = unload_ignored  # type: ignore[method-assign]
+    with pytest.raises(StepError, match="crossfade"):
+        runner.apply_mode(Mode("dark", "dark"), generated, "kuura", [])
+    assert ("run", "plasma-apply-colorscheme") not in desktop.log
+
+
+def test_guest_quiet_threshold_for_io_wait() -> None:
+    """
+    A guest whose CPUs idle while a process waits on the disk is not quiet: the I/O wait
+    share must be at most ``MAX_IOWAIT_FRACTION`` (5 %), checked on both sides of the
+    limit. A probe without an I/O wait counter (two values) is judged on the busy share
+    alone.
+
+    Returns:
+        None.
+    """
+    assert Runner._guest_quiet((0, 0, 0), (1, 94, 5)) is True
+    assert Runner._guest_quiet((0, 0, 0), (1, 93, 6)) is False
+    assert Runner._guest_quiet((0, 0, 0), (1, 69, 30)) is False
+    # Busy and I/O wait are limited separately: each within its own limit is quiet.
+    assert Runner._guest_quiet((0, 0, 0), (15, 80, 5)) is True
+    assert Runner._guest_quiet((0, 0, 0), (16, 79, 5)) is False
+    assert Runner._guest_quiet((0, 0), (1, 99)) is True
 
 
 def test_guest_quiet_threshold() -> None:
@@ -866,8 +1040,9 @@ def test_apply_mode_writes_the_scheme_activates_it_and_waits_for_the_change(tmp_
     result = runner.apply_mode(Mode("dark", "dark"), make_generated(tmp_path), "kuura", [])
     assert result.stable
     assert desktop.files == {"/home/desktop/.local/share/color-schemes/kuura-dark.colors": b"[General]\nName=kuura\n"}
-    assert [entry[0] for entry in desktop.log] == ["write", "run", "run-wait"]
-    assert desktop.log[2] == ("run-wait", True)
+    runs = [entry for entry in desktop.log if entry[0] in ("write", "run")]
+    assert runs == [("run", "gdbus"), ("run", "gdbus"), ("write", "/home/desktop/.local/share/color-schemes/kuura-dark.colors"), ("run", "plasma-apply-colorscheme")]
+    assert desktop.log[-1] == ("run-wait", True)
 
 
 def test_apply_mode_runs_the_reset_on_an_empty_desktop_before_switching(tmp_path: Path, clock: FakeClock, desktop: FakeDesktop) -> None:
@@ -892,7 +1067,7 @@ def test_apply_mode_runs_the_reset_on_an_empty_desktop_before_switching(tmp_path
     kinds = [entry[0] for entry in desktop.log]
     assert kinds[:2] == ["key", "key"]
     assert kinds.index("write") > 1
-    assert kinds.index("run") > kinds.index("write")
+    assert desktop.log.index(("run", "plasma-apply-colorscheme")) > kinds.index("write")
     # A second switch resets again (not only the first one).
     (generated / "plasma" / "kuura-light.colors").write_bytes(b"[General]\nName=kuura\n")
     desktop.log.clear()

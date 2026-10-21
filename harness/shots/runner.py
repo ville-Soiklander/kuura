@@ -25,6 +25,17 @@ The one piece of logic that decides whether a screenshot is any good is SETTLE:
   QUIET while it was taken: at most ``MAX_BUSY_FRACTION`` of the guest's CPU time was
   spent since the previous poll (measured from ``/proc/stat`` through the guest agent;
   an idle desktop uses about 1 %). Without a probe the frame criterion stands alone.
+* THE DISK-WAIT TRAP: a program blocked on the guest disk uses no CPU at all, so the
+  busy share alone calls it quiet. That is exactly what a colour scheme switch looks
+  like on a cold disk (the first boot after the image was rebuilt, when the host has
+  not cached the image yet): the shell recolours the shelf background at once, then
+  sits in disk sleep for seconds while it looks up the icons it must re-render in the
+  new colours, and only then repaints them. The half-recoloured desktop is still and
+  the CPUs idle, so it used to be captured. A poll therefore also counts as quiet only
+  if at most ``MAX_IOWAIT_FRACTION`` of the CPU time was I/O wait.
+* THE STALE-PANEL TRAP: no settle rule can wait for a picture that never comes. KWin's
+  colour-switch crossfade sometimes leaves a panel unrepainted (see
+  ``Runner._disable_crossfade``), so a mode switch runs without that effect.
 * A settle that runs out of ``settle_timeout_s`` is a failed state.
 
 Time and sleeping are injected so the logic is testable without waiting.
@@ -53,12 +64,25 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # loading applications use far more.
 MAX_BUSY_FRACTION = 0.15
 
+# A poll counts as "guest quiet" only when at most this share of the guest's CPU time was
+# I/O wait (a CPU idling while a process waits on the disk). Measured: an idle desktop
+# stays below 2 %, while the shell blocked on icon lookups after a scheme switch shows
+# 25-30 % on the 4 vCPU guest. One blocked process accounts for about 1/vCPUs of the
+# time, so the limit is kept well below the busy limit to stay meaningful on larger guests.
+MAX_IOWAIT_FRACTION = 0.05
+
 # Package manager inside the guest; asked (as root, no shell) whether the image was built
 # from the product named by the theme name (see Runner._check_product).
 PACMAN = "/usr/bin/pacman"
 
-# Reads the guest's CPU counters: returns (busy, idle) jiffies summed over all CPUs.
-CpuProbe = Callable[[], "tuple[int, int]"]
+# KWin's colour-switch crossfade effect and the D-Bus call (run as the desktop user,
+# no shell) that loads, unloads and queries effects. See Runner._disable_crossfade.
+CROSSFADE_EFFECT = "blendchanges"
+KWIN_EFFECTS_CALL = ["gdbus", "call", "--session", "--dest", "org.kde.KWin", "--object-path", "/Effects", "--method"]
+
+# Reads the guest's CPU counters: returns (busy, idle, iowait) jiffies summed over all
+# CPUs. A probe that cannot tell I/O wait apart may return just (busy, idle).
+CpuProbe = Callable[[], "tuple[int, ...]"]
 
 
 class ScreenAndInput(Protocol):
@@ -271,8 +295,9 @@ class Runner:
         clock: Monotonic clock (replaced in tests).
         sleep: Sleep function (replaced in tests).
         log: Progress callback receiving one line of text.
-        cpu_probe: Returns ``(busy, idle)`` guest CPU counters, or None to settle on
-            the frame criterion alone (see the module docstring, "starved guest").
+        cpu_probe: Returns ``(busy, idle, iowait)`` guest CPU counters (or just
+            ``(busy, idle)``), or None to settle on the frame criterion alone (see the
+            module docstring, "starved guest" and "disk wait").
     """
 
     def __init__(
@@ -301,13 +326,14 @@ class Runner:
         # Theme names already confirmed to be the image's product (see _check_product).
         self._product_checked: set[str] = set()
 
-    def _read_cpu(self) -> tuple[int, int] | None:
+    def _read_cpu(self) -> tuple[int, ...] | None:
         """
         Read the guest's CPU counters.
 
         Returns:
-            ``(busy, idle)`` or None when there is no probe or the guest agent could not
-            answer this time (the frame criterion then decides alone for this poll).
+            ``(busy, idle, iowait)`` (or ``(busy, idle)``), or None when there is no
+            probe or the guest agent could not answer this time (the frame criterion
+            then decides alone for this poll).
 
         Raises:
             ConnectionError: the VM connection is gone.
@@ -320,24 +346,33 @@ class Runner:
             return None
 
     @staticmethod
-    def _guest_quiet(before: tuple[int, int] | None, after: tuple[int, int] | None) -> bool:
+    def _guest_quiet(before: tuple[int, ...] | None, after: tuple[int, ...] | None) -> bool:
         """
         Tell whether the guest was quiet between two CPU readings.
 
         Args:
-            before: Earlier ``(busy, idle)`` reading, or None.
-            after: Later reading, or None.
+            before: Earlier ``(busy, idle, iowait)`` reading (``iowait`` may be left
+                out: it then counts as 0), or None.
+            after: Later reading of the same shape, or None.
 
         Returns:
             True if a reading is missing (no evidence of activity), no time passed, or
-            at most ``MAX_BUSY_FRACTION`` of the elapsed CPU time was busy.
+            at most ``MAX_BUSY_FRACTION`` of the elapsed CPU time was busy AND at most
+            ``MAX_IOWAIT_FRACTION`` of it was I/O wait.
         """
         if before is None or after is None:
             return True
         busy, idle = after[0] - before[0], after[1] - before[1]
-        if busy + idle <= 0:
+        # A two-value reading has no I/O wait counter; it is judged on the busy share alone.
+        iowait = after[2] - before[2] if len(before) > 2 and len(after) > 2 else 0
+        total = busy + idle + iowait
+        if total <= 0:
             return True
-        return busy / (busy + idle) <= MAX_BUSY_FRACTION
+        # WHY two separate limits: one process in disk sleep shows up as roughly 1/vCPUs
+        # of I/O wait (25 % on 4 vCPUs, 12.5 % on 8), so folding it into the 15 % busy
+        # limit would stop catching it on larger guests. An idle desktop has almost no
+        # I/O wait, so it can have a tight limit of its own.
+        return busy / total <= MAX_BUSY_FRACTION and iowait / total <= MAX_IOWAIT_FRACTION
 
     def settle(
         self,
@@ -501,8 +536,9 @@ class Runner:
 
         Raises:
             StepError: the theme name is not the image's product (``_check_product``),
-                the file is missing, the tool failed or the screen did not change and
-                settle.
+                the file is missing, the crossfade could not be disabled
+                (``_disable_crossfade``), the tool failed or the screen did not change
+                and settle.
         """
         scheme_id = f"{name}-{mode.scheme}"
         source = generated_dir / "plasma" / f"{scheme_id}.colors"
@@ -520,6 +556,7 @@ class Runner:
         emptied = self.settle(masks)
         if not emptied.stable:
             raise StepError(f"the desktop did not settle before applying mode {mode.name} ({emptied.reason})")
+        self._disable_crossfade()
         before = self._snapshot_now("mode-before")
         destination = f"{self._guest.user.home}/.local/share/color-schemes/{scheme_id}.colors"
         self._guest.write_file(destination, data)
@@ -530,6 +567,36 @@ class Runner:
         if not settled.stable:
             raise StepError(f"the screen did not settle after applying mode {mode.name} ({settled.reason})")
         return settled
+
+    def _disable_crossfade(self) -> None:
+        """
+        Unload KWin's colour-switch crossfade before a scheme switch, and make sure it is gone.
+
+        WHY: ``plasma-apply-colorscheme`` first asks KWin's ``blendchanges`` effect to
+        crossfade from a snapshot of the old screen to the new one. When the shell
+        recolours a panel while that crossfade is running, the panel is sometimes not
+        repainted after it ends, and the screen keeps a stale picture of it: the old
+        stock blue icons and/or glass without the final tint. Nothing on screen
+        changes any more, so no amount of waiting helps: the top bar healed only when
+        its clock next ticked (20-35 s later), and a stale shelf stayed for over a
+        minute, through a KWin reconfigure, a pointer move and opening the launcher.
+        Measured on the gpu display: 6 of 32 boots captured a stale panel with the
+        effect loaded, 0 of 18 with it unloaded. The crossfade is a transition, never
+        part of a captured state, so the harness switches without it. Unloading lasts
+        until KWin reloads its configuration and is harmless when already done, so it
+        is done before every switch.
+
+        Raises:
+            StepError: KWin did not answer, or the effect is still loaded afterwards.
+        """
+        try:
+            self._guest.run_as_user([*KWIN_EFFECTS_CALL, "org.kde.kwin.Effects.unloadEffect", CROSSFADE_EFFECT], wait_exit=True)
+            # gdbus prints the boolean reply as "(false,)" or "(true,)".
+            loaded = self._guest.run_as_user([*KWIN_EFFECTS_CALL, "org.kde.kwin.Effects.isEffectLoaded", CROSSFADE_EFFECT], wait_exit=True)
+        except (TimeoutError, RuntimeError) as exc:
+            raise StepError(f"could not disable the colour switch crossfade ({exc})") from None
+        if loaded is None or loaded.exit_code != 0 or loaded.stdout.strip() != "(false,)":
+            raise StepError("could not disable the colour switch crossfade: KWin still reports it loaded or did not answer")
 
     def _snapshot_now(self, name: str) -> Path:
         """

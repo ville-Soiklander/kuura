@@ -953,9 +953,9 @@ def test_process_running_uses_pgrep_exit_status(make_agent: Any) -> None:
 
 def test_cpu_sample_reads_busy_and_idle_jiffies(make_agent: Any) -> None:
     """
-    The first ``cpu`` line of ``/proc/stat`` becomes ``(busy, idle)``: user, nice, system,
-    irq and softirq are busy, idle and iowait are idle, stolen time is ignored; damaged
-    output is a ``GuestAgentError``.
+    The first ``cpu`` line of ``/proc/stat`` becomes ``(busy, idle, iowait)``: user, nice,
+    system, irq and softirq are busy, idle and iowait are reported separately, stolen
+    time is ignored; damaged output is a ``GuestAgentError``.
 
     Args:
         make_agent: Factory fixture.
@@ -965,7 +965,7 @@ def test_cpu_sample_reads_busy_and_idle_jiffies(make_agent: Any) -> None:
     """
     agent, state = make_agent()
     state.results["/usr/bin/cat"] = (0, "cpu  100 5 50 800 50 3 2 7 0 0\ncpu0 25 1 12 200 12 1 0 2 0 0\n")
-    assert agent.cpu_sample() == (100 + 5 + 50 + 3 + 2, 850)
+    assert agent.cpu_sample() == (100 + 5 + 50 + 3 + 2, 800, 50)
     for bad in ((0, "garbage\n"), (0, ""), (1, "cpu  1 2 3 4 5 6 7\n"), (0, "cpu  a b c d e f g\n")):
         state.results["/usr/bin/cat"] = bad
         with pytest.raises(GuestAgentError, match="CPU counters"):

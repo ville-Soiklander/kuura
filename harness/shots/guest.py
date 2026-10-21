@@ -462,16 +462,20 @@ class GuestAgent:
         if owned.exit_code != 0:
             raise GuestAgentError(f"could not give {path.rsplit('/', 1)[-1]!r} to the desktop user")
 
-    def cpu_sample(self) -> tuple[int, int]:
+    def cpu_sample(self) -> tuple[int, int, int]:
         """
         Read the guest's CPU time counters.
 
         Two samples taken some time apart tell how busy the guest was in between. Time
         stolen by the host is ignored (it is neither guest work nor guest idleness).
+        I/O wait is reported on its own: a CPU in I/O wait does no work, but a process
+        is blocked on the disk, so the guest is not finished (see the runner's
+        "disk wait" trap).
 
         Returns:
-            ``(busy, idle)`` jiffies summed over all CPUs: busy is user, nice, system,
-            irq and softirq time; idle includes I/O wait.
+            ``(busy, idle, iowait)`` jiffies summed over all CPUs: busy is user, nice,
+            system, irq and softirq time; idle is pure idle time; iowait is idle time
+            while a process waited for I/O.
 
         Raises:
             GuestAgentError: the counters could not be read or parsed.
@@ -487,7 +491,7 @@ class GuestAgent:
             user, nice, system, idle, iowait, irq, softirq = (int(v) for v in fields[1:8])
         except (ValueError, IndexError):
             raise GuestAgentError("could not read the guest CPU counters") from None
-        return user + nice + system + irq + softirq, idle + iowait
+        return user + nice + system + irq + softirq, idle, iowait
 
     def process_running(self, name: str) -> bool:
         """

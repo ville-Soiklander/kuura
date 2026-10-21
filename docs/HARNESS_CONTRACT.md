@@ -151,10 +151,33 @@ hardware GL context, so effects that need GL (Blur, Frost) render and can be scr
   gpu runs of the same build differed by up to `material.noise` x 255 levels on every
   glass surface. Frost now seeds it with a constant (kuura-frost 0.1.0-8); two runs then
   match pixel for pixel in 23 of 24 states.
-- **Known flake: first state's shelf icons.** In gpu mode the light `desktop-empty` state
-  (the first capture after boot) can be taken before the shelf icons are recoloured with
-  the accent colour (stock blue instead of the project teal); a rerun usually passes. The
-  goldens hold the recoloured, final state. Not yet fixed in the harness.
+- **Fixed flake: first state's stale panels (2026-10-21).** The light `desktop-empty`
+  state (the first capture after boot) sometimes failed with stock blue shelf and tray
+  icons and a uniform fine difference over the whole top bar and shelf glass; a rerun
+  passed. Cause: `plasma-apply-colorscheme` starts KWin's `blendchanges` effect, which
+  crossfades from a snapshot of the old screen to the new one. When plasmashell
+  recolours a panel while that crossfade runs, the panel is sometimes not repainted
+  after it ends, and the screen keeps a stale picture of it (old icons and/or glass
+  without the final tint) while nothing changes any more, so the settle rightly calls
+  it stable. Evidence (gpu display, boot + light switch + `desktop-empty`, warm image):
+  with the effect loaded 6 of 32 boots ended on a stale panel; the top bar healed only
+  when its clock next ticked (20-35 s later), and one stale shelf stayed for over a
+  minute through a KWin reconfigure, re-applying the scheme, a pointer move and opening
+  the launcher. With the effect unloaded before the switch, 0 of 18 boots did. Fix:
+  `Runner.apply_mode` unloads `blendchanges` over D-Bus (`org.kde.kwin.Effects`) before
+  every switch and fails the mode if KWin still reports it loaded. The crossfade is a
+  transition, never part of a captured state. The stale-panel bug itself is upstream
+  (KWin/plasmashell) and can also hit a real user's desktop after a scheme switch.
+- **Also fixed: a switch on a cold guest disk.** On a cold disk plasmashell can sit in
+  uninterruptible disk sleep (icon lookups) for seconds between recolouring the panel
+  background and the icons; the CPUs are idle meanwhile, and the probe used to count I/O
+  wait as idle. Reproduced by dropping the guest page cache and throttling the virtual
+  disk to 20 read IOPS (QMP `block_set_io_throttle`): the settle accepted the half-done
+  frame, and the icons followed 8 s later. The guest CPU probe now reports I/O wait
+  separately, and a poll is quiet only if at most 5 % of the CPU time was I/O wait (an
+  idle desktop stays below 2 %; the blocked shell shows 25-30 % on 4 vCPUs) besides the
+  15 % busy limit. This was a real gap but not the cause of the observed failures, which
+  also happened on warm images.
 - **Proves:** KWin runs with a GL context via virgl, and GL-dependent effects produce the
   expected pixels in that stack.
 - **Cannot prove:** real-hardware performance; behaviour with the native NVIDIA, AMD or
@@ -182,7 +205,7 @@ is tied to the virtual monitor of a 2560x1440 mode.
 
 **Determinism under host CPU contention is not guaranteed.** The settle logic (see
 `harness/shots/runner.py`) already ignores a frame while the guest's own CPU counters
-show it busy, but a synthetic full-host-load test (all host cores saturated by other
+show it busy or waiting on its disk, but a synthetic full-host-load test (all host cores saturated by other
 processes, well beyond ordinary CI contention) once produced large, unreproduced content
 differences on `settings-window`, `browser-window` and `files-window` (up to 43% of the
 screen) alongside a smaller, reproducible sensitivity on `menubar-open` (~0.4% of the
