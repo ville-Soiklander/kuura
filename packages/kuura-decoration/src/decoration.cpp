@@ -37,10 +37,10 @@ BorderPreset borderPresetFor(KDecoration3::BorderSize size)
 Rgba toRgba(const QColor &c)
 {
     if (!c.isValid()) {
-        return Rgba{0, 0, 0, 255};
+        return Rgba{.r = 0, .g = 0, .b = 0, .a = 255};
     }
-    return Rgba{static_cast<std::uint8_t>(c.red()), static_cast<std::uint8_t>(c.green()),
-                static_cast<std::uint8_t>(c.blue()), static_cast<std::uint8_t>(c.alpha())};
+    return Rgba{.r = static_cast<std::uint8_t>(c.red()), .g = static_cast<std::uint8_t>(c.green()),
+                .b = static_cast<std::uint8_t>(c.blue()), .a = static_cast<std::uint8_t>(c.alpha())};
 }
 
 QColor toQColor(const Rgba &c)
@@ -50,7 +50,7 @@ QColor toQColor(const Rgba &c)
 
 QRectF toQRectF(const RectF &r)
 {
-    return QRectF(r.x, r.y, r.width, r.height);
+    return {r.x, r.y, r.width, r.height};
 }
 
 namespace
@@ -59,14 +59,14 @@ namespace
 /// Qt geometry -> geometry.h type (only needed here, so not part of the header).
 RectF toRectF(const QRectF &r)
 {
-    return RectF{r.x(), r.y(), r.width(), r.height()};
+    return RectF{.x = r.x(), .y = r.y(), .width = r.width(), .height = r.height()};
 }
 
 /// geometry.h margins -> Qt, each edge snapped to the device pixel grid of @p scale.
 QMarginsF toSnappedMargins(const MarginsF &m, double scale)
 {
-    return QMarginsF(snapToPixelGrid(m.left, scale), snapToPixelGrid(m.top, scale), snapToPixelGrid(m.right, scale),
-                     snapToPixelGrid(m.bottom, scale));
+    return {snapToPixelGrid(m.left, scale), snapToPixelGrid(m.top, scale), snapToPixelGrid(m.right, scale),
+            snapToPixelGrid(m.bottom, scale)};
 }
 
 } // namespace
@@ -129,10 +129,13 @@ bool Decoration::init()
 
     // The groups read the button lists from the settings, call our creator per type and
     // recreate the buttons themselves when the lists change (decorationbuttongroup.cpp).
+    // NOLINTBEGIN(cppcoreguidelines-owning-memory): Qt parent ownership - `this` (the
+    // decoration) is the QObject parent that deletes both groups.
     m_leftButtons = new KDecoration3::DecorationButtonGroup(KDecoration3::DecorationButtonGroup::Position::Left, this,
                                                             &Button::create);
     m_rightButtons = new KDecoration3::DecorationButtonGroup(KDecoration3::DecorationButtonGroup::Position::Right, this,
                                                              &Button::create);
+    // NOLINTEND(cppcoreguidelines-owning-memory)
     m_leftButtons->setSpacing(m_metrics.buttonSpacing);
     m_rightButtons->setSpacing(m_metrics.buttonSpacing);
 
@@ -236,7 +239,7 @@ void Decoration::hoverMoveEvent(QHoverEvent *event)
     // KDecoration3 only knows per-button hover and skips disabled buttons, but the glyphs
     // must appear on ALL discs while the pointer is anywhere over the group, gaps included.
     const QPointF pos = event->position();
-    const PointF p{pos.x(), pos.y()};
+    const PointF p{.x = pos.x(), .y = pos.y()};
     bool inside = false;
     for (const KDecoration3::DecorationButtonGroup *group : {m_leftButtons, m_rightButtons}) {
         if (group && contains(hoverZone(toRectF(group->geometry()), m_metrics), p)) {
@@ -283,7 +286,7 @@ void Decoration::recalculateBorders()
 void Decoration::updateTitleBar()
 {
     const QMarginsF b = borders();
-    const MarginsF current{b.left(), b.top(), b.right(), b.bottom()};
+    const MarginsF current{.left = b.left(), .top = b.top(), .right = b.right(), .bottom = b.bottom()};
     setTitleBar(toQRectF(titleBarRect(m_metrics, rect().width(), current, window()->isMaximized())));
 }
 
@@ -362,8 +365,9 @@ std::shared_ptr<KDecoration3::DecorationShadow> Decoration::sharedShadow(Mode mo
         bool built = false;
         std::shared_ptr<KDecoration3::DecorationShadow> shadow;
     };
-    static std::array<Slot, 2> cache;
-    Slot &slot = cache[mode == Mode::Dark ? 1 : 0];
+    static Slot lightSlot;
+    static Slot darkSlot;
+    Slot &slot = (mode == Mode::Dark) ? darkSlot : lightSlot;
     if (slot.built) {
         return slot.shadow;
     }
@@ -376,13 +380,15 @@ std::shared_ptr<KDecoration3::DecorationShadow> Decoration::sharedShadow(Mode mo
 
     // The logic renders straight opacity; KWin wants a premultiplied ARGB image, so the
     // shadow colour is applied and premultiplied per pixel here.
+    // setPixel() stores the value as is in a Format_ARGB32_Premultiplied image (it does
+    // NOT premultiply), so qPremultiply() stays; setPixel() replaces the raw scanline
+    // pointer arithmetic, which is affordable because this runs once per mode.
     QImage image(mask.width, mask.height, QImage::Format_ARGB32_Premultiplied);
+    auto alphaIt = mask.alpha.cbegin(); // row-major, top row first, same order as the loops
     for (int y = 0; y < mask.height; ++y) {
-        auto *line = reinterpret_cast<QRgb *>(image.scanLine(y));
         for (int x = 0; x < mask.width; ++x) {
-            const int a = mask.alpha[static_cast<std::size_t>(y) * static_cast<std::size_t>(mask.width)
-                                     + static_cast<std::size_t>(x)];
-            line[x] = qPremultiply(qRgba(mask.colour.r, mask.colour.g, mask.colour.b, a));
+            image.setPixel(x, y, qPremultiply(qRgba(mask.colour.r, mask.colour.g, mask.colour.b, *alphaIt)));
+            ++alphaIt;
         }
     }
 

@@ -17,7 +17,7 @@
 
 pkgname="${DISTRO_NAME:?DISTRO_NAME must be set}-decoration"
 pkgver=0.1.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Window decoration with round traffic-light buttons, colour-scheme title bar, drop shadow and four rounded corners"
 # Native code against a pinned library ABI (KDecoration3, Qt), hence a real architecture.
 arch=('x86_64')

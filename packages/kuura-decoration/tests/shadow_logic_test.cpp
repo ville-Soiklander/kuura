@@ -59,7 +59,7 @@ std::string show(const T &v)
 std::string show(const Rgba &c)
 {
     std::ostringstream os;
-    os << "rgba(" << int(c.r) << "," << int(c.g) << "," << int(c.b) << "," << int(c.a) << ")";
+    os << "rgba(" << static_cast<int>(c.r) << "," << static_cast<int>(c.g) << "," << static_cast<int>(c.b) << "," << static_cast<int>(c.a) << ")";
     return os.str();
 }
 
@@ -197,7 +197,7 @@ struct RefLayout {
 
 RefLayout refLayout(const ShadowParams &p)
 {
-    RefLayout l;
+    RefLayout l{};
     l.c = std::ceil(p.cornerRadius) + std::ceil(p.offsetY) + 1.0;
     l.padL = p.extent;
     l.padT = std::max(0.0, p.extent - p.offsetY);
@@ -303,7 +303,7 @@ static void testShadowParamsFromTokens()
     const Metrics m = tokenMetrics();
     const ModePalette light = tokenPalette(Mode::Light);
     const ShadowParams p = shadowParams(m, light);
-    const double size = static_cast<double>(Kuura::Tokens::kDecorationShadowSize);
+    const auto size = static_cast<double>(Kuura::Tokens::kDecorationShadowSize);
     const double offset = std::round(size / 4.0);
     CHECK_NEAR(p.offsetY, offset, 1e-9);
     CHECK_NEAR(p.extent, std::max(0.0, size - offset), 1e-9);
@@ -372,7 +372,9 @@ static void testShadowAlphaMonotonic()
 {
     const ShadowParams p = mainParams();
     double previous = shadowAlpha(-5.0, p);
-    for (double d = -4.75; d <= 15.0; d += 0.25) {
+    // Integer loop counter (d = -4.75 + 0.25 * i, exact in binary) instead of a floating-point one.
+    for (int i = 0; i <= 79; ++i) {
+        const double d = -4.75 + 0.25 * i;
         const double a = shadowAlpha(d, p);
         CHECK(a <= previous + 1e-12);
         CHECK(a >= 0.0);

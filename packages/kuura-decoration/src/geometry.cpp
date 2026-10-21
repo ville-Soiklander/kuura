@@ -32,7 +32,7 @@ double sanitizeScale(double scale)
 /// Maps a design-grid point (0..kGlyphGrid) onto the disc rectangle.
 PointF mapGridPoint(const PointF &p, const RectF &disc)
 {
-    return PointF{disc.x + p.x * disc.width / kGlyphGrid, disc.y + p.y * disc.height / kGlyphGrid};
+    return PointF{.x = disc.x + p.x * disc.width / kGlyphGrid, .y = disc.y + p.y * disc.height / kGlyphGrid};
 }
 
 } // namespace
@@ -130,12 +130,12 @@ MarginsF resizeOnlyBorders(BorderPreset preset, bool maximizedHorizontally, bool
 RectF titleBarRect(const Metrics &m, double decorationWidth, const MarginsF &borders, bool maximized)
 {
     if (maximized) {
-        return RectF{0.0, 0.0, std::max(0.0, decorationWidth), m.titleBarHeight};
+        return RectF{.x = 0.0, .y = 0.0, .width = std::max(0.0, decorationWidth), .height = m.titleBarHeight};
     }
     // Inset from the top by kTopResizeStrip and from the sides by the borders, so the
     // framework still finds the top edge and the two top corners as resize sections.
     const double width = std::max(0.0, decorationWidth - borders.left - borders.right);
-    return RectF{borders.left, kTopResizeStrip, width, m.titleBarHeight - kTopResizeStrip};
+    return RectF{.x = borders.left, .y = kTopResizeStrip, .width = width, .height = m.titleBarHeight - kTopResizeStrip};
 }
 
 double buttonGroupWidth(std::size_t count, const Metrics &m)
@@ -153,7 +153,7 @@ PointF buttonGroupOrigin(GroupSide side, double decorationWidth, double groupWid
     // extra pixel goes below the discs, never above.
     const double y = std::floor((m.titleBarHeight - m.buttonDiameter) / 2.0);
     const double x = (side == GroupSide::Left) ? m.buttonInset : decorationWidth - m.buttonInset - groupWidth;
-    return PointF{x, y};
+    return PointF{.x = x, .y = y};
 }
 
 std::vector<RectF> buttonRects(std::size_t count, const PointF &origin, const Metrics &m)
@@ -162,7 +162,10 @@ std::vector<RectF> buttonRects(std::size_t count, const PointF &origin, const Me
     rects.reserve(count);
     const double step = m.buttonDiameter + m.buttonSpacing;
     for (std::size_t i = 0; i < count; ++i) {
-        rects.push_back(RectF{origin.x + static_cast<double>(i) * step, origin.y, m.buttonDiameter, m.buttonDiameter});
+        rects.push_back(RectF{.x = origin.x + static_cast<double>(i) * step,
+                              .y = origin.y,
+                              .width = m.buttonDiameter,
+                              .height = m.buttonDiameter});
     }
     return rects;
 }
@@ -174,15 +177,22 @@ RectF hoverZone(const RectF &group, const Metrics &m)
     }
     // Full bar height on purpose: the pointer moving vertically past a disc must not
     // flicker the glyphs off while it is still "at the buttons".
-    return RectF{group.x - kHoverSlack, 0.0, group.width + 2.0 * kHoverSlack, m.titleBarHeight};
+    return RectF{.x = group.x - kHoverSlack,
+                 .y = 0.0,
+                 .width = group.width + 2.0 * kHoverSlack,
+                 .height = m.titleBarHeight};
 }
 
+// The two group widths are plain lengths with no natural distinct type; the call sites
+// name them (left/right) and the result is symmetric in them (max of the two), so a swap
+// cannot change the outcome.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 RectF captionRect(double decorationWidth, double leftGroupWidth, double rightGroupWidth, const Metrics &m)
 {
     // The same padding on both sides keeps the caption centred in the whole bar even
     // when only one side has buttons.
     const double pad = m.buttonInset + std::max(leftGroupWidth, rightGroupWidth) + m.captionGap;
-    return RectF{pad, 0.0, std::max(0.0, decorationWidth - 2.0 * pad), m.titleBarHeight};
+    return RectF{.x = pad, .y = 0.0, .width = std::max(0.0, decorationWidth - 2.0 * pad), .height = m.titleBarHeight};
 }
 
 double cornerRadius(const Metrics &m, bool maximized)
@@ -190,6 +200,9 @@ double cornerRadius(const Metrics &m, bool maximized)
     return maximized ? 0.0 : m.cornerRadius;
 }
 
+// A (value, scale) pair of plain doubles is the natural signature of a rounding helper;
+// wrapper types would only add noise at every call site.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 double snapToPixelGrid(double value, double scale)
 {
     const double s = sanitizeScale(scale);
@@ -206,16 +219,20 @@ double outlineThickness(const Metrics &m, double scale)
 
 std::vector<GlyphBar> glyphBars(Glyph glyph, const RectF &disc, double stroke)
 {
-    const PointF centre{disc.x + disc.width / 2.0, disc.y + disc.height / 2.0};
+    const PointF centre{.x = disc.x + disc.width / 2.0, .y = disc.y + disc.height / 2.0};
     switch (glyph) {
     case Glyph::Close: {
         // "+ stroke" compensates for the round caps so the visible cross matches the
         // QML theme, whose bars were measured including their caps.
         const double length = kCloseBarFactor * disc.width + stroke;
-        return {GlyphBar{centre, length, stroke, 45.0}, GlyphBar{centre, length, stroke, -45.0}};
+        return {GlyphBar{.centre = centre, .length = length, .thickness = stroke, .angleDegrees = 45.0},
+                GlyphBar{.centre = centre, .length = length, .thickness = stroke, .angleDegrees = -45.0}};
     }
     case Glyph::Minimize:
-        return {GlyphBar{centre, kMinimizeBarFactor * disc.width + stroke, stroke, 0.0}};
+        return {GlyphBar{.centre = centre,
+                         .length = kMinimizeBarFactor * disc.width + stroke,
+                         .thickness = stroke,
+                         .angleDegrees = 0.0}};
     case Glyph::None:
     case Glyph::Maximize:
     case Glyph::Restore:
@@ -237,7 +254,8 @@ std::vector<GridTriangle> glyphTriangles(Glyph glyph, const RectF &disc)
     std::vector<GridTriangle> out;
     out.reserve(source->size());
     for (const GridTriangle &t : *source) {
-        out.push_back(GridTriangle{mapGridPoint(t[0], disc), mapGridPoint(t[1], disc), mapGridPoint(t[2], disc)});
+        out.push_back(GridTriangle{mapGridPoint(std::get<0>(t), disc), mapGridPoint(std::get<1>(t), disc),
+                                   mapGridPoint(std::get<2>(t), disc)});
     }
     return out;
 }

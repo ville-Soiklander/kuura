@@ -1,0 +1,46 @@
+# Directory-scoped override for this package's three headless unit tests
+# (geometry_test.cpp, palette_logic_test.cpp, shadow_logic_test.cpp). They are plain
+# C++20 programs with a tiny hand-rolled CHECK harness and large table-driven
+# fixtures; running the root .clang-tidy Checks list against them produced several
+# hundred warnings that trace back to a few test-only idioms, not to defects. Fixing
+# the real findings (C-style casts, unchecked optionals, an uninitialised struct, a
+# floating-point loop counter, a signed/unsigned comparison) was done in the files
+# themselves; only the idioms below are relaxed.
+#
+# This override does NOT relax anything for the shipped plugin code (packages/
+# kuura-decoration/src/, still governed by the root .clang-tidy's full Checks list
+# and its HeaderFilterRegex) - the tests are not installed (PKGBUILD package()).
+#
+# Excluded here, with reasons (do not remove without understanding why):
+#   -modernize-use-designated-initializers
+#     Table rows such as `{"titleBarHeight", &Metrics::titleBarHeight, 23.0, 24.0,
+#     64.0, 65.0}` and compact geometry fixtures `RectF{0, 0, 12, 12}` are read as
+#     columns; naming every field on every row would triple the width of the tables
+#     and hide the numbers that are the whole point of a boundary test.
+#   -cppcoreguidelines-avoid-c-arrays, -modernize-avoid-c-arrays
+#     Those same fixture tables are `const Row rows[] = {...}` so the element count
+#     is deduced; std::array would need an explicit size that must be kept in sync
+#     with the number of rows by hand.
+#   -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+#   -cppcoreguidelines-pro-bounds-constant-array-index
+#     Tests index vectors and arrays right after a CHECK of their size, or with a
+#     loop index over a fixture table. A failing index here is itself a test
+#     failure, so a bounds-checked accessor adds no safety (the same situation the
+#     kuura-frost test override documents).
+#   -cppcoreguidelines-avoid-non-const-global-variables
+#     g_checks / g_failures are the harness's two counters, incremented by the
+#     CHECK macros and read by main() for the exit code and the summary line; a
+#     test program has no other place to keep them without a fixture framework
+#     this project deliberately does not depend on.
+#   -bugprone-easily-swappable-parameters
+#     Test helpers such as makeParams(extent, offset, alpha, radius) take several
+#     plain doubles named at every call site; strong types would only add noise.
+InheritParentConfig: true
+Checks: >
+  -modernize-use-designated-initializers,
+  -cppcoreguidelines-avoid-c-arrays,
+  -modernize-avoid-c-arrays,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -bugprone-easily-swappable-parameters

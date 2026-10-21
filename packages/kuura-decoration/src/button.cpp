@@ -101,6 +101,9 @@ Button *Button::create(KDecoration3::DecorationButtonType type, KDecoration3::De
     if (!deco) {
         return nullptr;
     }
+    // Qt object-tree ownership: the decoration button group that called this creator
+    // takes over the pointer.
+    // NOLINTNEXTLINE(cppcoreguidelines-owning-memory)
     auto *button = new Button(type, kind, deco, parent);
     const double d = deco->metrics().buttonDiameter;
     button->setGeometry(QRectF(0.0, 0.0, d, d));
@@ -148,7 +151,10 @@ void Button::paint(QPainter *painter, const QRectF &repaintArea)
     // already square, the settings preview may hand us a non-square item.
     const QRectF g = geometry();
     const double side = std::min(g.width(), g.height());
-    const RectF disc{g.x() + (g.width() - side) / 2.0, g.y() + (g.height() - side) / 2.0, side, side};
+    const RectF disc{.x = g.x() + (g.width() - side) / 2.0,
+                     .y = g.y() + (g.height() - side) / 2.0,
+                     .width = side,
+                     .height = side};
 
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
@@ -161,7 +167,7 @@ void Button::paint(QPainter *painter, const QRectF &repaintArea)
     const Glyph glyph = glyphFor(m_kind, state);
     if (glyph != Glyph::None) {
         QColor ink = toQColor(palette.glyphInk);
-        ink.setAlphaF(ink.alphaF() * kGlyphOpacity);
+        ink.setAlphaF(static_cast<float>(ink.alphaF() * kGlyphOpacity));
         painter->setBrush(ink);
 
         // Bars are drawn as rounded rects in a rotated coordinate system centred on the
@@ -175,7 +181,11 @@ void Button::paint(QPainter *painter, const QRectF &repaintArea)
             painter->restore();
         }
         for (const GridTriangle &t : glyphTriangles(glyph, disc)) {
-            const QPolygonF poly{QPointF(t[0].x, t[0].y), QPointF(t[1].x, t[1].y), QPointF(t[2].x, t[2].y)};
+            // Range-for instead of t[0..2]: no unchecked indexing, same three vertices.
+            QPolygonF poly;
+            for (const PointF &vertex : t) {
+                poly << QPointF(vertex.x, vertex.y);
+            }
             painter->drawPolygon(poly);
         }
     }

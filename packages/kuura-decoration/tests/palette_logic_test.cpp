@@ -29,6 +29,7 @@
 #include <sstream>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 using namespace Kuura::Deco;
 
@@ -57,7 +58,7 @@ std::string show(const T &v)
 std::string show(const Rgba &c)
 {
     std::ostringstream os;
-    os << "rgba(" << int(c.r) << "," << int(c.g) << "," << int(c.b) << "," << int(c.a) << ")";
+    os << "rgba(" << static_cast<int>(c.r) << "," << static_cast<int>(c.g) << "," << static_cast<int>(c.b) << "," << static_cast<int>(c.a) << ")";
     return os.str();
 }
 
@@ -98,8 +99,8 @@ void checkNear(double a, double b, double eps, const char *ea, const char *eb, c
 void checkRgb(const Rgba &c, int r, int g, int b, int a, int tol, const char *expr, const char *file, int line)
 {
     ++g_checks;
-    const bool ok = std::abs(int(c.r) - r) <= tol && std::abs(int(c.g) - g) <= tol && std::abs(int(c.b) - b) <= tol
-        && int(c.a) == a;
+    const bool ok = std::abs(static_cast<int>(c.r) - r) <= tol && std::abs(static_cast<int>(c.g) - g) <= tol && std::abs(static_cast<int>(c.b) - b) <= tol
+        && std::cmp_equal(c.a, a);
     if (!ok) {
         ++g_failures;
         std::cerr << file << ":" << line << ": CHECK_RGB failed: " << expr << " (got " << show(c) << ", expected rgba(" << r
@@ -340,8 +341,8 @@ static void testDarkerLightensAndIsMonotonic()
     int previous = 1000;
     for (const double f : {0.8, 1.0, 1.28, 1.5, 2.0, 4.0, 10.0}) {
         const Rgba d = darker(c, f);
-        CHECK(int(d.r) <= previous);
-        previous = int(d.r);
+        CHECK(std::cmp_less_equal(d.r, previous));
+        previous = static_cast<int>(d.r);
     }
     // Strictly darker for a real darkening factor.
     CHECK(darker(c, 1.28).r < c.r);
@@ -430,9 +431,15 @@ static void testDiscColorScenarios()
 
     // The three kinds use three different fields (a swap would be caught here).
     const ButtonVisualState a = makeState(true, false, false, false, true, false);
-    CHECK(!(*discColor(ButtonKind::Close, a, p) == *discColor(ButtonKind::Minimize, a, p)));
-    CHECK(!(*discColor(ButtonKind::Minimize, a, p) == *discColor(ButtonKind::Maximize, a, p)));
-    CHECK(!(*discColor(ButtonKind::Close, a, p) == *discColor(ButtonKind::Maximize, a, p)));
+    const std::optional<Rgba> closeColor = discColor(ButtonKind::Close, a, p);
+    const std::optional<Rgba> minimizeColor = discColor(ButtonKind::Minimize, a, p);
+    const std::optional<Rgba> maximizeColor = discColor(ButtonKind::Maximize, a, p);
+    CHECK(closeColor.has_value() && minimizeColor.has_value() && maximizeColor.has_value());
+    if (closeColor && minimizeColor && maximizeColor) {
+        CHECK(!(*closeColor == *minimizeColor));
+        CHECK(!(*minimizeColor == *maximizeColor));
+        CHECK(!(*closeColor == *maximizeColor));
+    }
 }
 
 // ---- buttonOpacity / showGlyph / glyphFor ----------------------------------------------

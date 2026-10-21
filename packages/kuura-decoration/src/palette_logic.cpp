@@ -41,10 +41,10 @@ std::optional<Rgba> typeColour(ButtonKind kind, const ModePalette &palette)
 
 Rgba unpackRgba(std::uint32_t packed)
 {
-    return Rgba{static_cast<std::uint8_t>((packed >> 24) & 0xFFu),
-                static_cast<std::uint8_t>((packed >> 16) & 0xFFu),
-                static_cast<std::uint8_t>((packed >> 8) & 0xFFu),
-                static_cast<std::uint8_t>(packed & 0xFFu)};
+    return Rgba{.r = static_cast<std::uint8_t>((packed >> 24) & 0xFFu),
+                .g = static_cast<std::uint8_t>((packed >> 16) & 0xFFu),
+                .b = static_cast<std::uint8_t>((packed >> 8) & 0xFFu),
+                .a = static_cast<std::uint8_t>(packed & 0xFFu)};
 }
 
 double hslLightness(const Rgba &c)
@@ -135,7 +135,7 @@ Rgba darker(const Rgba &c, double factor)
         r1 = chroma; b1 = x;
     }
     const double m = v - chroma;
-    return Rgba{toByte(r1 + m), toByte(g1 + m), toByte(b1 + m), c.a};
+    return Rgba{.r = toByte(r1 + m), .g = toByte(g1 + m), .b = toByte(b1 + m), .a = c.a};
 }
 
 std::optional<Rgba> discColor(ButtonKind kind, const ButtonVisualState &state, const ModePalette &palette)

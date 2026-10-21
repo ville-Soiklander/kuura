@@ -27,7 +27,10 @@ MarginsF shadowPadding(const ShadowParams &p)
 {
     // The shape is moved down by offsetY: it reaches offsetY less far above the frame
     // and offsetY further below it.
-    return MarginsF{p.extent, std::max(0.0, p.extent - p.offsetY), p.extent, p.extent + p.offsetY};
+    return MarginsF{.left = p.extent,
+                    .top = std::max(0.0, p.extent - p.offsetY),
+                    .right = p.extent,
+                    .bottom = p.extent + p.offsetY};
 }
 
 double shadowAlpha(double distance, const ShadowParams &p)
@@ -86,23 +89,30 @@ ShadowImage renderShadowImage(const ShadowParams &p)
     img.width = static_cast<int>(padL + core + padR);
     img.height = static_cast<int>(padT + core + padB);
     img.alpha.assign(static_cast<std::size_t>(img.width) * static_cast<std::size_t>(img.height), 0);
-    img.padding = MarginsF{static_cast<double>(padL), static_cast<double>(padT), static_cast<double>(padR),
-                           static_cast<double>(padB)};
-    img.innerShadowRect = RectF{static_cast<double>(padL) + c, static_cast<double>(padT) + c, 1.0, 1.0};
+    img.padding = MarginsF{.left = static_cast<double>(padL),
+                           .top = static_cast<double>(padT),
+                           .right = static_cast<double>(padR),
+                           .bottom = static_cast<double>(padB)};
+    img.innerShadowRect =
+        RectF{.x = static_cast<double>(padL) + c, .y = static_cast<double>(padT) + c, .width = 1.0, .height = 1.0};
 
-    const RectF coreRect{static_cast<double>(padL), static_cast<double>(padT), coreSide, coreSide};
-    const RectF shape{coreRect.x, coreRect.y + p.offsetY, coreSide, coreSide};
+    const RectF coreRect{
+        .x = static_cast<double>(padL), .y = static_cast<double>(padT), .width = coreSide, .height = coreSide};
+    const RectF shape{.x = coreRect.x, .y = coreRect.y + p.offsetY, .width = coreSide, .height = coreSide};
 
+    // The pixels are produced in row-major order, so a running iterator replaces the
+    // y * width + x index arithmetic and its unchecked operator[].
+    auto out = img.alpha.begin();
     for (int y = 0; y < img.height; ++y) {
         for (int x = 0; x < img.width; ++x) {
-            const PointF q{x + 0.5, y + 0.5};
+            const PointF q{.x = x + 0.5, .y = y + 0.5};
             const double value = shadowAlpha(roundedRectSignedDistance(q, shape, p.cornerRadius), p);
             // Cut out the frame itself (antialiased over one pixel) so a translucent client
             // or the transparent area outside the rounded corners never shows the shadow.
             const double cut = std::clamp(roundedRectSignedDistance(q, coreRect, p.cornerRadius) + 0.5, 0.0, 1.0);
             const long a = std::lround(255.0 * value * cut);
-            img.alpha[static_cast<std::size_t>(y) * static_cast<std::size_t>(img.width) + static_cast<std::size_t>(x)] =
-                static_cast<std::uint8_t>(std::clamp(a, 0L, 255L));
+            *out = static_cast<std::uint8_t>(std::clamp(a, 0L, 255L));
+            ++out;
         }
     }
     return img;
