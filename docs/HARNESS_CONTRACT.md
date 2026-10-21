@@ -29,6 +29,7 @@ harness/
   shots/                 Python package `harness.shots`
     pngio.py diff.py review.py compare.py accept.py      (comparison side)
     qmp.py guest.py keys.py vm.py states.py runner.py capture.py determinism.py  (capture side)
+    stock.py               stock Plasma "before" shots (see "Stock 'before' shots")
   goldens/<mode>/<state>.png     approved images, stored with git-lfs
 ```
 
@@ -187,6 +188,64 @@ hardware GL context, so effects that need GL (Blur, Frost) render and can be scr
   `qemu-ui-opengl`, `qemu-ui-egl-headless`. The render node must exist and be accessible.
 - Note: software rendering in the normal mode comes from the emulated non-3D display
   device, not from `LIBGL_ALWAYS_SOFTWARE` (kwin_wayland on DRM ignores that variable).
+
+## Stock "before" shots
+
+`python3 -m harness.shots.stock [--out DIR] [--states a,b] [--display software|gpu] [--name NAME] [--image-dir DIR]`
+(`harness/shots/stock.py`) photographs the SAME guest image with Plasma's own defaults, for
+README before/after pairs. Output: `DIR/light/<state>.png` and `DIR/manifest.json`; the
+default `DIR` is `.build/shots-stock` (or `.build/shots-stock-gpu` with `--display gpu`;
+compare those with `harness/goldens-gpu/light`). Exit codes as `capture`. These pictures are
+never goldens and are never compared or accepted.
+
+One boot (with `-snapshot`, so the image never changes), then the product's per-user
+settings are reverted at runtime as the desktop user, the result is read back, and only then
+are states captured with the normal reset/steps/settle. What was product-specific was taken
+from the image itself (package file lists of the product packages and the desktop user's
+config), not guessed:
+
+| Product setting (where it comes from) | Reverted to |
+|---|---|
+| `kdeglobals` `LookAndFeelPackage=<product>` (shell package skel) | `plasma-apply-lookandfeel --apply org.kde.breeze.desktop --resetLayout`: Breeze colours (Breeze Light), icons, widget style, Plasma theme, cursor, decoration, and the default layout (one bottom panel, default wallpaper) |
+| Panel layout: top menubar with global menu + floating shelf (skel `plasma-org.kde.plasma.desktop-appletsrc`, `plasmashellrc` panel thickness/floating by containment id) | the look-and-feel's default layout; the old `[PlasmaViews][Panel 2/8]` keys are deleted first so a new panel cannot inherit them |
+| `kwinrc` decoration plugin `<product>.decoration`, left button layout, `BorderSizeAuto`, `RoundedCorners` | keys deleted (KWin defaults); the look-and-feel sets `org.kde.breeze` |
+| Glass compositor effect `<product>_frost` (installed "enabled by default") | `[Plugins] <product>_frostEnabled=false`, KWin reconfigured, effect unloaded |
+| `kwinrc` `blendchangesEnabled=false`, Overview tuning, sliding-popup timing | keys deleted |
+| `krunnerrc` `FreeFloating`, lock-screen wallpaper, Kvantum theme name, GTK theme names, `GTK_THEME`/`GTK_MODULES` session variables | deleted / unset (not visible in the offered states) |
+
+The read-back must show: look-and-feel Breeze (or unset = default), colour scheme Breeze
+Light (or unset), `breeze` icons, KWin's own support information naming `org.kde.breeze` as
+the loaded decoration, the glass effect not loaded, exactly one panel, at the bottom, with
+the stock applets and no global menu, and the `org.kde.image` wallpaper with the default
+image. Any mismatch stops the run before a single state is captured (exit 2).
+
+Not reverted on purpose (test infrastructure shared with the goldens, so the pair stays
+comparable): the harness window rules, animation factor 0, cursor blink off, splash,
+wallet, indexing and lock settings, the sample files. Also left alone because they are
+inert or invisible: the product's installed-but-unselected themes, icons, sounds,
+decoration plugin and colour schemes, the font alias file (only defines the product's
+own family names, nothing selects them in a stock session), the login-screen theme (not
+part of a running session), the welcome autostart (the test image keeps it off) and four
+KWin shortcuts in `kglobalshortcutsrc` (no captured state uses them).
+
+Offered states: `desktop-empty`, `files-window`, `settings-window`, `overview` (default
+set), `search-open`, `notification`. Refused, with the reason in `EXCLUDED_STATES`:
+`menubar-open` and `shelf-hover` (their pointer targets are the product's panels),
+`app-menu-gtk` and `gtk4-widget-factory` (the image lacks the Breeze GTK theme a stock
+Plasma install has, so GTK apps would look worse than stock), `browser-window` (the
+product's preconfigured browser) and `welcome-window` (product-only program). Light mode
+only.
+
+- **Proves:** what this image's own Plasma 6 looks like with its defaults restored, same
+  VM, programs, resolution, window geometry and sample content as the goldens.
+- **Cannot prove:** that it equals a fresh stock install. Packages the product pulls in
+  stay installed, a stock session started at first login would also run per-user
+  migration/first-run steps that a runtime switch does not, KWin and plasmashell were
+  started with the product config and switched live (not restarted), and the session
+  variables of programs started by the harness come from a list read once per boot.
+  Fonts, the wallpaper (the product does not change the desktop wallpaper) and the
+  application set are the same on both sides, so the pair isolates the product's shell,
+  decoration, colours and effects.
 
 ## Limits
 
