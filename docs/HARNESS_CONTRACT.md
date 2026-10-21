@@ -144,7 +144,17 @@ hardware GL context, so effects that need GL (Blur, Frost) render and can be scr
   QEMU fails the run with an error instead of blocking.
 - **Separate goldens.** Compare gpu captures only against `harness/goldens-gpu/`
   (`--goldens harness/goldens-gpu`); never mix them with `harness/goldens/`. Accepting
-  gpu goldens is a human decision like any other.
+  gpu goldens is a human decision like any other. The first set (24 states) was accepted
+  by the project owner on 2026-10-21; they are stored with git-lfs like `harness/goldens/`.
+- **Deterministic only with a fixed noise pattern.** Frost's dither noise texture used a
+  randomly seeded generator, so every compositor start drew a different pattern and two
+  gpu runs of the same build differed by up to `material.noise` x 255 levels on every
+  glass surface. Frost now seeds it with a constant (kuura-frost 0.1.0-8); two runs then
+  match pixel for pixel in 23 of 24 states.
+- **Known flake: first state's shelf icons.** In gpu mode the light `desktop-empty` state
+  (the first capture after boot) can be taken before the shelf icons are recoloured with
+  the accent colour (stock blue instead of the project teal); a rerun usually passes. The
+  goldens hold the recoloured, final state. Not yet fixed in the harness.
 - **Proves:** KWin runs with a GL context via virgl, and GL-dependent effects produce the
   expected pixels in that stack.
 - **Cannot prove:** real-hardware performance; behaviour with the native NVIDIA, AMD or

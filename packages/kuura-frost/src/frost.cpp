@@ -251,13 +251,19 @@ bool Frost::generateNoiseTexture()
     constexpr int kNoiseTextureSize = 256;
     QImage noiseImage(QSize(kNoiseTextureSize, kNoiseTextureSize), QImage::Format_Grayscale8);
 
-    // WHY QRandomGenerator rather than literally mirroring BlurEffect's own
-    // std::rand()/std::srand() call: apply()'s docstring asks this method to
-    // reuse the noise TECHNIQUE (tiled grayscale image, GL_NEAREST + GL_REPEAT),
-    // not its exact RNG source. QRandomGenerator::global() is already seeded,
-    // thread-safe, and has none of std::rand()/std::srand()'s global-mutable-
-    // state re-entrancy concerns -- a strictly better choice for newly written
-    // code generating a one-shot, non-cryptographic dither pattern.
+    // WHY a local QRandomGenerator with a FIXED seed: apply()'s docstring asks
+    // this method to reuse the noise TECHNIQUE (tiled grayscale image,
+    // GL_NEAREST + GL_REPEAT), not Blur's std::rand()/std::srand() source,
+    // whose global mutable state is shared with every other caller. The seed
+    // is constant because a dither pattern only has to look random, not be
+    // unpredictable: with QRandomGenerator::global() (randomly seeded per
+    // process) every compositor start drew a different pattern, so two
+    // hardware-GL screenshot runs of the same build differed by up to
+    // noise * 255 levels on every glass surface and GPU goldens could never
+    // match (2026-10-21). A fixed seed makes the pattern identical on every
+    // start and every machine.
+    constexpr quint32 kNoiseSeed = 0x6B75u;
+    QRandomGenerator noiseRng(kNoiseSeed);
     for (int y = 0; y < noiseImage.height(); ++y) {
         // QImage::scanLine() is Qt's own real API for direct pixel access; it
         // returns a raw uchar* by design, with no bounds-checked alternative in
@@ -270,7 +276,7 @@ bool Frost::generateNoiseTexture()
         // is guaranteed to hold, by QImage's own contract.
         uchar *line = noiseImage.scanLine(y);
         for (int x = 0; x < noiseImage.width(); ++x) {
-            line[x] = static_cast<uchar>(QRandomGenerator::global()->bounded(256)); // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            line[x] = static_cast<uchar>(noiseRng.bounded(256)); // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
         }
     }
 

@@ -186,7 +186,7 @@ def test_real_tokens_produce_the_five_frost_material_constants() -> None:
     """
     real_tokens = json.loads(REAL_TOKENS_PATH.read_text(encoding="utf-8"))
     text = render(real_tokens)
-    assert "inline constexpr float kMaterialRefractionStrength = 0.035f;" in text
+    assert "inline constexpr float kMaterialRefractionStrength = 0.2f;" in text
     assert "inline constexpr int kMaterialRefractionEdgeFalloff = 12;" in text
     assert "inline constexpr float kMaterialEdgeHighlightWidth = 1.5f;" in text
     assert "inline constexpr float kMaterialEdgeHighlightOpacity = 0.55f;" in text
@@ -205,7 +205,7 @@ def test_real_tokens_changing_a_material_value_only_changes_that_constant() -> N
     diff = [(b, a) for b, a in zip(before, after, strict=True) if b != a]
     assert diff == [
         (
-            "inline constexpr float kMaterialRefractionStrength = 0.035f;",
+            "inline constexpr float kMaterialRefractionStrength = 0.2f;",
             "inline constexpr float kMaterialRefractionStrength = 0.099f;",
         )
     ]
