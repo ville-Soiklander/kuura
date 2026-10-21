@@ -160,6 +160,23 @@ class TestGenerate:
         # Verify sorted
         assert result == sorted(result), "Result must be sorted"
 
+    def test_generate_writes_lf_line_endings_only(self, tmp_path):
+        """Every generated file has LF line endings, whatever the host OS.
+
+        The outputs are installed on Linux and copied into packages, so a CR from
+        Python's platform newline translation (CRLF on Windows) breaks them there.
+        Uses the real renderers so every write path is exercised.
+        """
+        from design.validate import load_tokens
+
+        tokens_path = Path(__file__).parent.parent / "tokens.json"
+        tokens = load_tokens(tokens_path)
+
+        result = generate(tokens, tmp_path, "test_theme")
+
+        with_cr = [str(p.relative_to(tmp_path)) for p in result if b"\r" in p.read_bytes()]
+        assert with_cr == [], f"files written with CR line endings: {with_cr}"
+
 
 class TestMain:
     """Tests for main() function."""

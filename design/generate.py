@@ -140,8 +140,10 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
 
             file_path = subdir / filename
 
-            # Write the file
-            file_path.write_text(content, encoding="utf-8")
+            # Write the file. WHY newline="\n" (here and on every write below): the
+            # outputs are installed on Linux, and Python's default newline translation
+            # would write CRLF when this runs on Windows.
+            file_path.write_text(content, encoding="utf-8", newline="\n")
             written_paths.append(file_path)
 
     # Panel layout: mode-independent (no light/dark variant), so it is
@@ -158,15 +160,15 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
     layout_subdir.mkdir(parents=True, exist_ok=True)
 
     appletsrc_path = layout_subdir / "plasma-org.kde.plasma.desktop-appletsrc"
-    appletsrc_path.write_text(plasma_layout.render(tokens), encoding="utf-8")
+    appletsrc_path.write_text(plasma_layout.render(tokens), encoding="utf-8", newline="\n")
     written_paths.append(appletsrc_path)
 
     plasmashellrc_path = layout_subdir / "plasmashellrc"
-    plasmashellrc_path.write_text(plasma_layout.render_view_settings(tokens), encoding="utf-8")
+    plasmashellrc_path.write_text(plasma_layout.render_view_settings(tokens), encoding="utf-8", newline="\n")
     written_paths.append(plasmashellrc_path)
 
     kactivitymanagerdrc_path = layout_subdir / "kactivitymanagerdrc"
-    kactivitymanagerdrc_path.write_text(plasma_layout.render_activities(tokens), encoding="utf-8")
+    kactivitymanagerdrc_path.write_text(plasma_layout.render_activities(tokens), encoding="utf-8", newline="\n")
     written_paths.append(kactivitymanagerdrc_path)
 
     # C++ token header: mode-independent (no light/dark variant, see
@@ -180,7 +182,7 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
     cpp_subdir.mkdir(parents=True, exist_ok=True)
 
     tokens_header_path = cpp_subdir / "tokens.h"
-    tokens_header_path.write_text(cpp_header.render(tokens), encoding="utf-8")
+    tokens_header_path.write_text(cpp_header.render(tokens), encoding="utf-8", newline="\n")
     written_paths.append(tokens_header_path)
 
     # Per-mode colour constants for native code (packages/kuura-decoration): a second
@@ -196,7 +198,7 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
     fontconfig_subdir.mkdir(parents=True, exist_ok=True)
 
     fontconfig_path = fontconfig_subdir / f"{name}-fonts.conf"
-    fontconfig_path.write_text(fontconfig.render(tokens, name), encoding="utf-8")
+    fontconfig_path.write_text(fontconfig.render(tokens, name), encoding="utf-8", newline="\n")
     written_paths.append(fontconfig_path)
 
     # KWin sliding-popups ini fragment: mode-independent like the three blocks
@@ -210,7 +212,7 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
     kwin_subdir.mkdir(parents=True, exist_ok=True)
 
     slidingpopups_path = kwin_subdir / "slidingpopups.ini"
-    slidingpopups_path.write_text(kwin_motion.render_slidingpopups_fragment(tokens), encoding="utf-8")
+    slidingpopups_path.write_text(kwin_motion.render_slidingpopups_fragment(tokens), encoding="utf-8", newline="\n")
     written_paths.append(slidingpopups_path)
 
     # Calamares branding descriptor: mode-independent like the four blocks
@@ -224,7 +226,7 @@ def generate(tokens: dict, out_dir: Path, name: str) -> list[Path]:
     calamares_subdir.mkdir(parents=True, exist_ok=True)
 
     branding_desc_path = calamares_subdir / "branding.desc"
-    branding_desc_path.write_text(calamares_branding.render(tokens, name), encoding="utf-8")
+    branding_desc_path.write_text(calamares_branding.render(tokens, name), encoding="utf-8", newline="\n")
     written_paths.append(branding_desc_path)
 
     # Return sorted paths
