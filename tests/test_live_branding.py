@@ -47,7 +47,7 @@ def test_motd_keeps_connectivity_hints() -> None:
 
 
 def test_issue_keeps_getty_escapes() -> None:
-    """agetty expands \r (kernel release) and \l (tty); the file must keep them literal."""
+    r"""agetty expands \r (kernel release) and \l (tty); the file must keep them literal."""
     assert BS + "r (" + BS + "l)" in (ETC / "issue").read_text(encoding="utf-8")
 
 
